@@ -48,11 +48,16 @@ test("draw runs 0 at the slack point and 1 at full draw", () => {
     hand({ x: 0.2, span, pinch: CLOSED }),
     hand({ x: 0.2 + spans * span, span, pinch: OPEN }),
   ]).draw;
-  assert.equal(at(BOW.DRAW_MIN), 0);
-  assert.equal(at(BOW.DRAW_FULL), 1);
-  assert.ok(Math.abs(at((BOW.DRAW_MIN + BOW.DRAW_FULL) / 2) - 0.5) < 1e-9);
+  // Tolerances, not equality: draw is a ratio of two differences, so whether it
+  // lands exactly on 1 depends on which constants happen to divide evenly. It
+  // did with the first guessed pair and stopped when they were replaced by
+  // measured ones, which is a fact about floating point and not about the bow.
+  const near = (a, b, why) => assert.ok(Math.abs(a - b) < 1e-9, `${why}: ${a} vs ${b}`);
+  near(at(BOW.DRAW_MIN), 0, "slack point");
+  near(at(BOW.DRAW_FULL), 1, "full draw");
+  near(at((BOW.DRAW_MIN + BOW.DRAW_FULL) / 2), 0.5, "halfway");
   assert.equal(at(BOW.DRAW_MIN - 1), 0, "slack does not go negative");
-  assert.equal(at(BOW.DRAW_FULL + 2), 1, "over-draw clamps");
+  near(at(BOW.DRAW_FULL + 2), 1, "over-draw clamps");
 });
 
 test("the same pose reads the same draw near the lens and far from it", () => {

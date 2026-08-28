@@ -16,10 +16,16 @@ import { LM } from "./vec.js";
 export const BOW = {
   // Distance between the wrists, measured in hand-spans so it means the same
   // thing whether you stand close to the lens or far from it. Below MIN the
-  // string is slack; at FULL it is at anchor. Numbers to be tuned in practice
-  // mode against the live readout, not guessed at here.
-  DRAW_MIN: 1.8,
-  DRAW_FULL: 4.4,
+  // string is slack; at FULL it is at anchor.
+  //
+  // Measured on a real draw, 2026-08-28: slack sat at 2.1 spans and full draw
+  // reached 5.3. Neither bound is set to those numbers exactly. MIN sits above
+  // the measured slack so that resting hands read a true zero instead of
+  // flickering around one, and FULL sits below the measured maximum so that
+  // 100% is somewhere you can reliably get to rather than the one pose you can
+  // just barely reach on a good rep.
+  DRAW_MIN: 2.3,
+  DRAW_FULL: 5.0,
 
   // Thumb-to-index gap over hand span. Same formula the rune gate uses, but
   // stateless and per-hand, because the bow needs the string hand judged
