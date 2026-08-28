@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Veilcore — Practice Range</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=IBM+Plex+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #05060c; overflow: hidden; }
+    canvas { display: block; }
+    /* width/height are not optional: a canvas is a replaced element, so with
+       width:auto `inset: 0` lays it out at its intrinsic buffer size instead of
+       stretching it, and on a 2x display you see the top-left quarter. */
+    .range-gl { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; }
+    .range-overlay { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
+    .range-video { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; top: 0; left: 0; }
+    .range-start {
+      position: fixed; inset: 0; z-index: 2;
+      display: grid; place-content: center; justify-items: center; gap: 16px;
+      background: radial-gradient(circle at 50% 34%, #1d2438 0, #0d1220 30%, #05060c 74%);
+      text-align: center; color: #cfd9ec; font-family: "IBM Plex Mono", monospace;
+    }
+    .range-start[hidden] { display: none; }
+    .range-start h1 {
+      margin: 0; font-family: "Cormorant Garamond", serif; font-weight: 400;
+      font-size: clamp(2.6rem, 7vw, 4.4rem); color: #f3ead7; letter-spacing: .06em;
+    }
+    .range-kicker { margin: 0; font-size: 11px; letter-spacing: .32em; color: #8ab4ff; }
+    .range-sub { margin: 0; max-width: 52ch; line-height: 1.9; font-size: 13px; color: #93a3c0; }
+    .range-start button {
+      margin-top: 6px; padding: 13px 32px; border: 1px solid #6f8fd0; border-radius: 2px;
+      background: transparent; color: #ffe6b8; cursor: pointer;
+      font: 500 13px/1 "IBM Plex Mono", monospace; letter-spacing: .22em;
+    }
+    .range-start button:hover { background: #6f8fd022; }
+    .range-error { max-width: 46ch; padding: 10px 14px; border: 1px solid #6b3b34; color: #ff9c82; font-size: 12px; line-height: 1.6; }
+    .range-error[hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <canvas class="range-gl" data-range-gl></canvas>
+  <canvas class="range-overlay" data-range-overlay></canvas>
+  <video class="range-video" data-range-video playsinline muted autoplay></video>
+
+  <section class="range-start" data-range-start>
+    <p class="range-kicker">VEILCORE · PRACTICE RANGE</p>
+    <h1>Nock and Loose</h1>
+    <p class="range-sub">
+      Both hands up. Close the fingers of one hand on the string, pull the hands
+      apart to draw, open them to loose. The panel reports every number the bow
+      measures — tune BOW in js/spell-room/archery.js against it.
+    </p>
+    <button type="button" data-range-enter>OPEN THE RANGE</button>
+    <p class="range-error" data-range-error hidden></p>
+  </section>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="js/practice.js"></script>
+</body>
+</html>

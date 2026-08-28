@@ -33,6 +33,27 @@ appears the instant the shape locks; the percentage next to it is your charge.
 
 Add `?nocam` to skip the camera and cast from the keyboard instead.
 
+## Practice range
+
+`practice.html` — targets, no duel. Both hands up, close one hand's fingers on
+the string, pull the hands apart, open them to loose.
+
+It exists so the bow can be tuned. Every number `archery.js` measures is on the
+glass while you shoot: draw in hand-spans and as a percentage, the peak reached,
+the aim angle, how many hands are seen, and the tracking rate — that last one
+matters because two-handed tracking costs roughly twice one hand, and if it
+falls below about 20 Hz the draw will feel mushy for reasons that have nothing
+to do with the numbers.
+
+`DRAW_MIN` and `DRAW_FULL` in `js/spell-room/archery.js` are hand-spans between
+the wrists. They are starting guesses. Stand where you actually play, watch
+`spans` at slack and at full draw, and set them to what you see.
+
+Aim is relative: wherever the bow hand sits when the string is nocked becomes
+the centre of the screen. Facing a webcam, an archer's arrow points across the
+frame rather than into it, so following the arrow literally would fire at the
+wall.
+
 ## Where things live
 
 | | |
@@ -45,6 +66,8 @@ Add `?nocam` to skip the camera and cast from the keyboard instead.
 | `js/arena/opponent.js` | the rival's behaviour |
 | `js/arena/match.js` | objective, resources, win conditions |
 | `js/arena/config.js` | **every tuning number, in one file** |
+| `js/practice.js` | the practice range and its measurement panel |
+| `js/spell-room/archery.js` | two-handed bow: draw length, aim, the shot |
 | `js/spell-room/magic.js` | pinch gate, stroke recording, rune recognition |
 | `js/spell-room/tracker.js` | webcam and MediaPipe |
 | `js/spells/beam.js` | the beam effect |

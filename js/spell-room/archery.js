@@ -58,8 +58,12 @@ export function readBow(hands) {
   const [a, b] = hands;
   const aClosed = pinchRatio(a.landmarks) < BOW.PINCH_ON;
   const bClosed = pinchRatio(b.landmarks) < BOW.PINCH_ON;
-  // Both closed or neither: fall back to the conventional stance rather than
-  // refusing to report, so the practice readout still shows a draw length.
+  // Both closed, or neither: fall back to the stance the game is built around --
+  // left hand forward on the bow, right hand back on the string. Hands arrive
+  // sorted by x with the mirror already undone, so the right hand is the second
+  // one. Reporting a draw from an ambiguous grip beats refusing to report at
+  // all, because the practice readout has to keep showing numbers while you are
+  // still finding the pose.
   const string = aClosed && !bClosed ? a : bClosed && !aClosed ? b : b;
   const bow = string === a ? b : a;
 
@@ -141,6 +145,10 @@ export function createBowState() {
       return {
         phase, draw: read.draw, spans: read.spans,
         aim: read.aim, angle: read.angle, peak, event,
+        // Handed out so consumers point the reticle with the same hand this
+        // file picked. Deciding it twice is how the panel ends up disagreeing
+        // with the shot.
+        bowWrist: read.bow.wrist, stringWrist: read.string.wrist,
       };
     },
   };
