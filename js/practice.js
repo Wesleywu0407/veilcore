@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import { buildEnvironment } from './arena/scene.js';
 import { initTracker, getFrame, disposeTracker } from './spell-room/tracker.js';
 import { createBowState, BOW } from './spell-room/archery.js';
+import { makeOneEuro } from './spell-room/one-euro.js';
 
 const GOLD = '#ffd98a';
 const BLUE = '#8ab4ff';
@@ -23,6 +24,22 @@ const DIM = '#7f899f';
 // screen, and moving it from there steers the reticle. That works from any
 // stance, needs no calibration step, and lets a small movement cover the range.
 const AIM_GAIN = 2.6;
+
+// A wrist is not a mouse. Raw landmarks jitter about 2% of frame width even when
+// the hand is still, and the aim gain multiplies whatever survives, so an
+// unfiltered reticle shakes. Two One Euro filters rather than one: at full draw
+// you are holding a pose and want the reticle dead, while at slack you are still
+// swinging the bow around and want it to keep up. Blending between them by draw
+// gets both without a cutoff that has to be right for two different jobs.
+const AIM_QUICK = { minCutoff: 0.9, beta: 0.05, dCutoff: 1.0 };
+const AIM_STEADY = { minCutoff: 0.18, beta: 0.05, dCutoff: 1.0 };
+
+// Drawing narrows the lens. It is what an archer does with their attention, and
+// it earns its keep mechanically: the reticle's screen-space shake stays the
+// same size while the world angle behind it shrinks, so a full draw is genuinely
+// more accurate rather than only looking that way.
+const FOV_SLACK = 55;
+const FOV_FULL = 32;
 
 const glCanvas = document.querySelector('[data-range-gl]');
 const overlay = document.querySelector('[data-range-overlay]');
@@ -129,6 +146,9 @@ let status = 'idle';
 let aimOrigin = null;            // bow-hand position captured when the string is nocked
 let lastPhase = 'idle';
 const reticle = { x: 0.5, y: 0.5 };
+const aimQuickX = makeOneEuro(AIM_QUICK), aimQuickY = makeOneEuro(AIM_QUICK);
+const aimSteadyX = makeOneEuro(AIM_STEADY), aimSteadyY = makeOneEuro(AIM_STEADY);
+const lerp = (a, b, t) => a + (b - a) * t;
 const shots = { fired: 0, hit: 0, lastPower: 0, lastMiss: null, lastRing: null };
 let cvFrames = 0, cvAt = 0, cvHz = 0, lastFrameAt = 0;
 
@@ -208,11 +228,22 @@ function loop(now) {
     if (bow.phase === 'nocked' && bow.bowWrist) {
       // Whichever hand archery.js decided is on the bow — not a second guess
       // made here, which would drift from it the moment the grip is ambiguous.
-      if (!aimOrigin) aimOrigin = { x: bow.bowWrist.x, y: bow.bowWrist.y };
-      reticle.x = clamp01(0.5 + (bow.bowWrist.x - aimOrigin.x) * AIM_GAIN);
-      reticle.y = clamp01(0.5 + (bow.bowWrist.y - aimOrigin.y) * AIM_GAIN);
+      if (!aimOrigin) {
+        aimOrigin = { x: bow.bowWrist.x, y: bow.bowWrist.y };
+        for (const f of [aimQuickX, aimQuickY, aimSteadyX, aimSteadyY]) f.reset();
+      }
+      const rawX = clamp01(0.5 + (bow.bowWrist.x - aimOrigin.x) * AIM_GAIN);
+      const rawY = clamp01(0.5 + (bow.bowWrist.y - aimOrigin.y) * AIM_GAIN);
+      reticle.x = lerp(aimQuickX.filter(rawX, now), aimSteadyX.filter(rawX, now), bow.draw);
+      reticle.y = lerp(aimQuickY.filter(rawY, now), aimSteadyY.filter(rawY, now), bow.draw);
     } else {
       aimOrigin = null;
+    }
+
+    const fov = lerp(FOV_SLACK, FOV_FULL, bow.phase === 'nocked' ? bow.draw : 0);
+    if (Math.abs(camera.fov - fov) > 0.05) {
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
     }
     lastPhase = bow.phase;
     if (bow.event?.type === 'loosed') loose(bow.event.power);
@@ -240,7 +271,7 @@ function drawPanel(frame, bow) {
   ctx.letterSpacing = '0.08em';
 
   ctx.fillStyle = 'rgba(6,9,17,.72)';
-  ctx.fillRect(18, 18, 268, 214);
+  ctx.fillRect(18, 18, 268, 228);
   line('BOW READOUT', 34, 42, BLUE, 11);
 
   const hands = frame.hands?.length ?? 0;
@@ -261,17 +292,18 @@ function drawPanel(frame, bow) {
     line('both hands in frame', 34, 84, '#b8894a');
     line('to read a draw', 34, 102, '#b8894a');
   }
-  line(`DRAW_MIN ${BOW.DRAW_MIN}   DRAW_FULL ${BOW.DRAW_FULL}`, 34, 192, '#5d6b86', 10);
-  line(`tracking ${cvHz.toFixed(0)} Hz`, 34, 208, cvHz > 20 ? '#5d6b86' : '#b8894a', 10);
+  line(`fov ${camera.fov.toFixed(0)}°   gain ${AIM_GAIN}`, 34, 192, '#5d6b86', 10);
+  line(`DRAW_MIN ${BOW.DRAW_MIN}   DRAW_FULL ${BOW.DRAW_FULL}`, 34, 206, '#5d6b86', 10);
+  line(`tracking ${cvHz.toFixed(0)} Hz`, 34, 222, cvHz > 20 ? '#5d6b86' : '#b8894a', 10);
 
   ctx.fillStyle = 'rgba(6,9,17,.72)';
-  ctx.fillRect(18, 244, 268, 104);
-  line('SHOTS', 34, 268, BLUE, 11);
+  ctx.fillRect(18, 258, 268, 104);
+  line('SHOTS', 34, 282, BLUE, 11);
   const pct = shots.fired ? ((shots.hit / shots.fired) * 100).toFixed(0) : '—';
-  line(`fired           ${shots.fired}`, 34, 292);
-  line(`hit             ${shots.hit}  (${pct}%)`, 34, 310, GOLD);
-  line(`last power      ${(shots.lastPower * 100).toFixed(0)}%`, 34, 328);
-  line(`last miss       ${shots.lastMiss === null ? '—' : shots.lastMiss.toFixed(2) + ' m'}`, 34, 346);
+  line(`fired           ${shots.fired}`, 34, 306);
+  line(`hit             ${shots.hit}  (${pct}%)`, 34, 324, GOLD);
+  line(`last power      ${(shots.lastPower * 100).toFixed(0)}%`, 34, 342);
+  line(`last miss       ${shots.lastMiss === null ? '—' : shots.lastMiss.toFixed(2) + ' m'}`, 34, 360);
 
   // Reticle
   if (tracking && bow?.phase === 'nocked') {
