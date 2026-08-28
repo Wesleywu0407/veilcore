@@ -66,6 +66,25 @@ export function createBowView(camera) {
   head.rotation.x = -Math.PI / 2;             // +Y tip swung round to -Z
   head.position.z = -ARROW_LENGTH / 2 - 0.042;
   arrow.add(head);
+
+  // Fletching. Nocked, the arrow runs away from the eye and the shaft is a few
+  // pixels of line; the feathers by your hand are the only part with any read to
+  // it, and without them a nocked arrow looks like a stick. Three vanes, because
+  // that is how many an arrow has and the odd one breaks the symmetry.
+  const vaneGeometry = new THREE.PlaneGeometry(0.055, 0.16);
+  const vaneMaterial = new THREE.MeshStandardMaterial({
+    color: 0xf3ead7, roughness: 0.85, side: THREE.DoubleSide,
+  });
+  for (let i = 0; i < 3; i++) {
+    const vane = new THREE.Mesh(vaneGeometry, i === 0
+      ? new THREE.MeshStandardMaterial({ color: 0xffd98a, roughness: 0.8, side: THREE.DoubleSide })
+      : vaneMaterial);
+    const angle = (i / 3) * Math.PI * 2;
+    vane.position.set(Math.cos(angle) * 0.028, Math.sin(angle) * 0.028, ARROW_LENGTH / 2 - 0.11);
+    vane.rotation.z = angle;
+    vane.rotation.y = Math.PI / 2;            // stand the vane along the shaft
+    arrow.add(vane);
+  }
   rig.add(arrow);
 
   let limbs = null;
