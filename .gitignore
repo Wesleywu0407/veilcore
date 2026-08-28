@@ -1,0 +1,7 @@
+node_modules/
+.DS_Store
+*.log
+
+# Generated media. Renders belong in storage, not in git history.
+*.mp4
+*.wav

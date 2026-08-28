@@ -1,0 +1,12 @@
+{
+  "name": "veilcore",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A five-minute duel you cast by drawing runes in the air.",
+  "scripts": {
+    "dev": "python3 -m http.server 5173",
+    "test": "node --test tests/*.test.mjs",
+    "runes": "node scripts/rune-distance.mjs"
+  }
+}

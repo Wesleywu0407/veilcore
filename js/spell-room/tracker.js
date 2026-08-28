@@ -1,0 +1,269 @@
+// ─── Spell Room — Hand tracking ───────────────────────────────────────────────
+//
+// Owns the webcam and MediaPipe. Everything downstream reads one small object
+// from getFrame() and never touches the camera itself.
+//
+// Two rules this file exists to enforce:
+//
+//   1. The CV loop and the render loop are SEPARATE. Detection runs at whatever
+//      rate the model manages (~30Hz on a laptop); the game renders at 60. If
+//      you call detectForVideo() inside requestAnimationFrame you have welded
+//      your frame rate to the model, and the spell animation will stutter at
+//      exactly the moment the player is watching hardest.
+//
+//   2. getFrame() never blocks and never throws. If the camera dies mid-session
+//      it returns the last known frame with tracked:false, and the game keeps
+//      running. A room that white-screens because a webcam unplugged is worse
+//      than a room with no webcam.
+
+import {
+  FilesetResolver,
+  HandLandmarker,
+} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+import { LM, dist } from "./vec.js";
+
+export { LM, dist };
+
+const WASM_ROOT = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const MODEL_URL =
+  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+
+let video = null;
+let landmarker = null;
+let running = false;
+let lastVideoTime = -1;
+
+// ─── Smoothing ────────────────────────────────────────────────────────────────
+//
+// MediaPipe's landmarks jitter by a few pixels every frame even when the hand
+// is perfectly still. Drawn raw, a circle comes out visibly serrated — and the
+// damage is not only cosmetic: that noise survives into resample() and pushes
+// the stroke away from the template, so recognition suffers too.
+//
+// This is the One Euro filter (Casiez et al., CHI 2012). A plain moving average
+// would trade jitter for lag, and lag is worse here — the point has to keep up
+// with a fast flick. One Euro adapts instead: heavy smoothing while the hand is
+// slow (where jitter is what you notice) and almost none while it is fast
+// (where lag is what you notice).
+
+const TIP_FILTER = {
+  minCutoff: 1.2,   // lower = smoother when still
+  beta: 0.015,      // higher = less lag when moving fast
+  dCutoff: 1.0,
+};
+
+function makeOneEuro({ minCutoff, beta, dCutoff }) {
+  let xPrev = null, dxPrev = 0, tPrev = 0;
+  const alpha = (cutoff, dt) => {
+    const tau = 1 / (2 * Math.PI * cutoff);
+    return 1 / (1 + tau / dt);
+  };
+  return {
+    reset() { xPrev = null; dxPrev = 0; tPrev = 0; },
+    filter(x, t) {
+      if (xPrev === null) { xPrev = x; tPrev = t; return x; }
+      const dt = Math.max((t - tPrev) / 1000, 1e-3);
+      tPrev = t;
+      const dx = (x - xPrev) / dt;
+      const aD = alpha(dCutoff, dt);
+      dxPrev = aD * dx + (1 - aD) * dxPrev;
+      // The speed estimate is what makes the cutoff adaptive.
+      const cutoff = minCutoff + beta * Math.abs(dxPrev);
+      const a = alpha(cutoff, dt);
+      xPrev = a * x + (1 - a) * xPrev;
+      return xPrev;
+    },
+  };
+}
+
+const tipX = makeOneEuro(TIP_FILTER);
+const tipY = makeOneEuro(TIP_FILTER);
+
+// ─── Dropout grace ────────────────────────────────────────────────────────────
+//
+// Opening the fingers to release changes the hand's silhouette sharply, and
+// MediaPipe routinely drops a frame or two right at that moment. Reporting
+// tracked:false there reads downstream as "the hand is gone" — which the cast
+// state machine treats as a release, so a stroke can fire or fizzle mid-draw.
+//
+// Hold the last known pose briefly instead. 200ms is long enough to ride out a
+// blink and short enough that a hand genuinely leaving the frame still ends the
+// gesture promptly.
+const TRACK_GRACE_MS = 200;
+
+// The single object the rest of the room reads. Mutated in place on purpose:
+// this is read every render frame and we are not allocating 60 objects a second.
+const frame = {
+  tracked: false,        // is a hand visible right now
+  landmarks: null,       // raw 21 points, normalized 0..1, x already un-mirrored
+  tip: { x: 0.5, y: 0.5 },   // index fingertip — the "wand tip", smoothed
+  handScale: 0.1,        // wrist→middle-knuckle distance, for distance-invariant thresholds
+  at: 0,                 // performance.now() of the last successful detection
+  // True while `tracked` is being held open by the grace window rather than by
+  // a fresh detection. Nothing needs it yet, but a consumer that wants to grey
+  // out the cursor during a dropout can.
+  stale: false,
+};
+
+// ─── Setup ────────────────────────────────────────────────────────────────────
+
+/**
+ * Reject if a step has not finished in time. Startup has three awaits — camera
+ * permission, a WASM fetch, and a 7.8 MB model download — and any one of them
+ * can hang without ever throwing. Without this the UI just sits on "waking the
+ * camera" forever and you cannot tell which step died.
+ */
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms),
+    ),
+  ]);
+}
+
+/**
+ * Ask for the camera and load the model. Must be called from a user gesture
+ * (a click or keypress) — browsers refuse getUserMedia otherwise, and the
+ * failure is silent enough that you will blame your own code for twenty
+ * minutes. `onStage` reports each step so a hang is attributable.
+ */
+export async function initTracker(videoEl, onStage = () => {}) {
+  video = videoEl;
+  tipX.reset();
+  tipY.reset();
+
+  onStage("asking for the camera");
+  const stream = await withTimeout(
+    navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: "user" },
+      audio: false,
+    }),
+    20000, "camera permission",
+  );
+  video.srcObject = stream;
+
+  // play() can stay pending forever if the element is hidden in a way the
+  // browser treats as "will never render". Do not let it block startup — the
+  // stream is already flowing, and detectForVideo() reads from the element
+  // regardless.
+  onStage("starting the video");
+  await withTimeout(video.play(), 5000, "video.play()").catch((err) => {
+    console.warn("[tracker] play() did not settle, continuing anyway:", err.message);
+  });
+
+  onStage("loading the model (7.8 MB)");
+  const vision = await withTimeout(
+    FilesetResolver.forVisionTasks(WASM_ROOT), 30000, "WASM download",
+  );
+
+  // GPU is faster but its init hangs on some Mac/Chrome combinations, and it
+  // hangs rather than throwing. Try it with a short leash, then fall back.
+  try {
+    landmarker = await withTimeout(
+      HandLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
+        runningMode: "VIDEO",
+        numHands: 1,
+      }),
+      15000, "GPU model load",
+    );
+  } catch (err) {
+    console.warn("[tracker] GPU delegate failed, falling back to CPU:", err.message);
+    onStage("GPU refused — retrying on CPU");
+    landmarker = await withTimeout(
+      HandLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: MODEL_URL, delegate: "CPU" },
+        runningMode: "VIDEO",
+        numHands: 1,
+      }),
+      30000, "CPU model load",
+    );
+  }
+
+  onStage("ready");
+  running = true;
+  detectLoop();
+  return true;
+}
+
+// ─── Detection loop ───────────────────────────────────────────────────────────
+
+/**
+ * Runs on its own rAF chain, independent of the game loop. It writes into
+ * `frame` and nothing else. Deliberately does no game logic — the moment
+ * detection starts deciding things, the two loops are coupled again.
+ */
+function detectLoop() {
+  if (!running) return;
+
+  // detectForVideo() throws if handed the same timestamp twice, and the camera
+  // often delivers fewer frames than the display refreshes.
+  if (video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    try {
+      const result = landmarker.detectForVideo(video, performance.now());
+      applyResult(result);
+    } catch {
+      // A dropped frame is not an error worth stopping for.
+    }
+  }
+
+  requestAnimationFrame(detectLoop);
+}
+
+function applyResult(result) {
+  const hand = result.landmarks && result.landmarks[0];
+  if (!hand) {
+    const lostFor = performance.now() - frame.at;
+    if (lostFor > TRACK_GRACE_MS) {
+      frame.tracked = false;
+      frame.stale = false;
+      tipX.reset();
+      tipY.reset();
+    } else {
+      frame.stale = true;   // still inside the grace window — hold the last pose
+    }
+    return;
+  }
+
+  // The webcam image is mirrored, so raising your right hand moves the point
+  // left. Flip x once, here, and every consumer downstream can stop thinking
+  // about it.
+  const flipped = hand.map((p) => ({ x: 1 - p.x, y: p.y, z: p.z }));
+
+  const now = performance.now();
+  const rawTip = flipped[LM.INDEX_TIP];
+
+  frame.landmarks = flipped;
+  // Only the drawing point is smoothed. The pinch gate reads raw landmarks on
+  // purpose: filtering the thumb-index gap would add lag to the one signal that
+  // has to feel instant, and the gate has its own hysteresis for noise.
+  frame.tip = { x: tipX.filter(rawTip.x, now), y: tipY.filter(rawTip.y, now) };
+  frame.handScale = dist(flipped[LM.WRIST], flipped[LM.MIDDLE_MCP]);
+  frame.tracked = true;
+  frame.stale = false;
+  frame.at = now;
+}
+
+// ─── Read API ─────────────────────────────────────────────────────────────────
+
+/** Latest frame. Never null, never throws. Do not mutate the object you get. */
+export function getFrame() {
+  return frame;
+}
+
+export function isReady() {
+  return running && landmarker !== null;
+}
+
+export function disposeTracker() {
+  running = false;
+  landmarker?.close?.();
+  landmarker = null;
+  const stream = video?.srcObject;
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  if (video) video.srcObject = null;
+}
+
