@@ -104,7 +104,20 @@ const frame = {
   // a fresh detection. Nothing needs it yet, but a consumer that wants to grey
   // out the cursor during a dropout can.
   stale: false,
+
+  // Both hands, when both are up. `landmarks` and `tip` above still point at the
+  // drawing hand, so everything that predates archery keeps working untouched.
+  //
+  // Sides are decided by x, not by MediaPipe's handedness label. The label is
+  // computed on the raw image, which the webcam mirrors, so it calls a physical
+  // right hand "Left"; the flip below un-mirrors the coordinates, after which
+  // the right hand simply has the larger x. Archery never crosses the arms, so
+  // position is the sturdier signal. The label is passed through as `reported`
+  // for anyone who wants to compare.
+  hands: [],
 };
+
+const EMPTY_HANDS = [];
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
@@ -165,7 +178,7 @@ export async function initTracker(videoEl, onStage = () => {}) {
       HandLandmarker.createFromOptions(vision, {
         baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
         runningMode: "VIDEO",
-        numHands: 1,
+        numHands: 2,
       }),
       15000, "GPU model load",
     );
@@ -176,7 +189,7 @@ export async function initTracker(videoEl, onStage = () => {}) {
       HandLandmarker.createFromOptions(vision, {
         baseOptions: { modelAssetPath: MODEL_URL, delegate: "CPU" },
         runningMode: "VIDEO",
-        numHands: 1,
+        numHands: 2,
       }),
       30000, "CPU model load",
     );
@@ -214,12 +227,36 @@ function detectLoop() {
 }
 
 function applyResult(result) {
-  const hand = result.landmarks && result.landmarks[0];
+  const all = result.landmarks ?? [];
+  // Un-mirror once, here, so no consumer downstream has to think about it.
+  const flippedAll = all.map((hand) => hand.map((p) => ({ x: 1 - p.x, y: p.y, z: p.z })));
+  const sides = flippedAll
+    .map((lm, i) => ({
+      landmarks: lm,
+      wrist: lm[LM.WRIST],
+      tip: lm[LM.INDEX_TIP],
+      scale: dist(lm[LM.WRIST], lm[LM.MIDDLE_MCP]),
+      reported: result.handedness?.[i]?.[0]?.categoryName ?? null,
+    }))
+    .sort((a, b) => a.wrist.x - b.wrist.x);
+  if (sides.length === 2) {
+    sides[0].side = 'left';
+    sides[1].side = 'right';
+  } else if (sides.length === 1) {
+    sides[0].side = null;   // one hand alone cannot be placed; do not guess
+  }
+  frame.hands = sides.length ? sides : EMPTY_HANDS;
+
+  // The drawing hand stays whatever it has always been: the only hand when
+  // there is one, and the right hand once there are two.
+  const primary = sides.length === 2 ? sides[1] : sides[0];
+  const hand = primary?.landmarks;
   if (!hand) {
     const lostFor = performance.now() - frame.at;
     if (lostFor > TRACK_GRACE_MS) {
       frame.tracked = false;
       frame.stale = false;
+      frame.hands = EMPTY_HANDS;
       tipX.reset();
       tipY.reset();
     } else {
@@ -228,11 +265,7 @@ function applyResult(result) {
     return;
   }
 
-  // The webcam image is mirrored, so raising your right hand moves the point
-  // left. Flip x once, here, and every consumer downstream can stop thinking
-  // about it.
-  const flipped = hand.map((p) => ({ x: 1 - p.x, y: p.y, z: p.z }));
-
+  const flipped = hand;   // already un-mirrored above
   const now = performance.now();
   const rawTip = flipped[LM.INDEX_TIP];
 
