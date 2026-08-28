@@ -10,6 +10,7 @@ import { buildEnvironment } from './arena/scene.js';
 import { initTracker, getFrame, disposeTracker } from './spell-room/tracker.js';
 import { createBowState, BOW } from './spell-room/archery.js';
 import { makeOneEuro } from './spell-room/one-euro.js';
+import { createBowView } from './arena/bow-view.js';
 
 const GOLD = '#ffd98a';
 const BLUE = '#8ab4ff';
@@ -61,6 +62,26 @@ scene.environment = buildEnvironment(renderer);
 const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 300);
 camera.position.set(0, 3.1, 0);
 camera.lookAt(0, 2.6, 40);
+
+// Children of the camera only render when the camera is itself in the graph.
+scene.add(camera);
+const bowView = createBowView(camera);
+bowView.setVisible(false);
+
+// The limbs arrive late and the range is playable without them: string, arrow
+// and reticle all work on their own, so a missing or slow model costs the look
+// and not the session.
+(async () => {
+  try {
+    const response = await fetch('assets/models/arena/bow.glb', { method: 'HEAD' });
+    if (!response.ok) return;
+    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+    const gltf = await new GLTFLoader().loadAsync('assets/models/arena/bow.glb');
+    bowView.attachLimbs(gltf.scene);
+  } catch (error) {
+    status = `bow model: ${error.message}`;
+  }
+})();
 
 scene.add(new THREE.HemisphereLight(0x9fb4e8, 0x0b1020, 1.1));
 const key = new THREE.DirectionalLight(0xffe6c0, 1.5);
@@ -239,6 +260,10 @@ function loop(now) {
     } else {
       aimOrigin = null;
     }
+
+    bowView.setVisible(frame.hands?.length === 2);
+    bowView.setNocked(bow.phase === 'nocked');
+    bowView.setDraw(bow.phase === 'nocked' ? bow.draw : 0);
 
     const fov = lerp(FOV_SLACK, FOV_FULL, bow.phase === 'nocked' ? bow.draw : 0);
     if (Math.abs(camera.fov - fov) > 0.05) {
