@@ -6,19 +6,43 @@ hold decides how hard it lands.
 
 Pure static — no build step, no server, no API. Open it and it runs.
 
-## Running it
+## Opening it
+
+There is no build step. Serve the folder and open a page.
 
 ```bash
-npm run dev          # any static server works; this one is python3's
+cd veilcore
+npm run dev
 ```
 
-Then open **http://localhost:5173/** and press ENTER THE DREAM.
+| | |
+|---|---|
+| **http://localhost:5173/** | the duel — press **BEGIN DUEL** |
+| **http://localhost:5173/practice.html** | the practice range — press **OPEN THE RANGE** |
 
-`getUserMedia` needs a secure context, so `localhost` or `https` only. Opening
-`index.html` from the filesystem will not get you a camera.
+`npm run dev` is just `python3 -m http.server 5173`; any static server does. If
+you use the **Live Server** extension in VS Code or Cursor, right-click
+`index.html` → *Open with Live Server*, and the ports become **5500**:
 
-The hand tracker downloads MediaPipe from a CDN on first cast (~8 MB), so the
-first run needs the network. Everything else is local.
+```
+http://127.0.0.1:5500/index.html
+http://127.0.0.1:5500/practice.html
+```
+
+**Do not open the files by double-clicking them.** `getUserMedia` only works in
+a secure context, which means `localhost`, `127.0.0.1`, or `https`. From a
+`file://` URL the page loads and the camera never arrives, with no error that
+says so.
+
+First run needs the network: the hand tracker pulls MediaPipe from a CDN (~8 MB)
+the first time you cast. Everything after that is local.
+
+### If the camera never starts
+
+The bottom-right corner tells you which step it is on. `OPEN + CLOSE TO
+CALIBRATE` means the camera is fine and the pinch gate is still learning your
+hand — see below. Anything else is a real failure, and the message names the
+step. Press **H** on either page to retry the camera without reloading.
 
 ## The two things that trip everyone up
 
