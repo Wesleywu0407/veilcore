@@ -4,9 +4,11 @@
 // Everything here runs on normalized 0..1 points; nothing here knows about
 // pixels, canvases or Three.js.
 //
-// The five functions marked TODO are the actual technique. The scaffolding
-// around them is plumbing. Fill them in order — each one is testable on its
-// own before the next matters.
+// The technique lives in five functions -- isPinching, resample,
+// normalizeStroke, templateDistance and recognize. Each is testable on its own,
+// and the scaffolding around them is plumbing. docs/spell-room.md explains why
+// each one is shaped the way it is; the TODO blocks below are kept because they
+// state the traps, not because anything is unfinished.
 //
 // A note on what "good" means here. Detection is the easy half. The hard half
 // is that a REJECTED gesture has to feel like the player's fault, not the
@@ -92,21 +94,28 @@ export const TUNE = {
 
 // ─── Rune templates ───────────────────────────────────────────────────────────
 // Control points in a 0..1 box, drawn in the order a hand would draw them.
-// `weapon` is the SKYVEIL weapon index this rune fires — see sky-room.js:977.
+// `weapon` is a leftover index from the project this was split out of. Nothing
+// reads it any more -- js/arena.js dispatches on `id`.
 //
 // These three shapes were picked by measuring, not by taste. Pairwise template
-// distance after resample + normalize:
+// distance after resample + normalize, from `npm run runes`:
 //
-//              Z       V       arc
-//      Z       —     0.591   0.621
-//      V     0.591     —     0.393
-//      arc   0.621   0.393     —
+//                  ringfall   aegis   gravity-seal
+//      ringfall        —      0.175      0.463
+//      aegis         0.175      —        0.467
+//      gravity-seal  0.463    0.467        —
 //
-// All comfortably apart. An inverted-V (∧) was the obvious fourth and it is
-// NOT here on purpose: it sits 0.057 from the arc, which is the same shape as
-// far as point-by-point comparison is concerned. Add it and a slightly rounded
-// ∧ starts casting the arc's spell at high confidence — a wrong spell, with no
-// fizzle to warn the player. Measure before you add a fourth.
+// Ringfall/aegis at 0.175 is the closest pair and the one to protect. A fourth
+// rune will most likely collide with ringfall rather than with whatever it
+// superficially resembles, because a circle is rotationally symmetric and the
+// rotation search aligns it against nearly anything.
+//
+// One number from the earlier build, because it is the exact trap: an arc (⌒)
+// and an inverted V (∧) sit 0.057 apart. To point-by-point comparison they are
+// the same shape, so a slightly rounded ∧ casts the arc's spell at high
+// confidence — a wrong spell, with no fizzle to warn the player. Corner count
+// separates shapes far better than curvature does. Measure before you add a
+// fourth.
 //
 // `closed: true` means the stroke returns to where it started. Closed shapes
 // need special handling in recognize() — see the TODO there.
@@ -146,9 +155,13 @@ export const RUNES = [
     id: "gravity-seal",
     name: "Gravity Seal",
     weapon: 3,
-    // Aegis is the same triangle the other way up, so these two live closer
-    // together than any other pair here. Check scripts/rune-distance.mjs before
-    // nudging either of them.
+    // The obvious guess -- that this and Aegis are the risky pair, being the
+    // same triangle inverted -- is wrong, and `npm run runes` says so: they sit
+    // 0.467 apart, the FURTHEST of the three. Reversal and rotation cannot turn
+    // a point-up triangle into a point-down one, so the search never brings
+    // them together. The real neighbour is ringfall/aegis at 0.175: a circle is
+    // rotationally symmetric, so the rotation search aligns it against almost
+    // anything. Measure before reshaping; do not reason from the picture.
     closed: true,
     points: [
       { x: 0.07, y: 0.12 },

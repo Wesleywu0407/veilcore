@@ -75,8 +75,13 @@ All three are closed shapes, which is why the recogniser tries every cyclic
 rotation of your stroke — a circle has no corner to start from, so without that
 only a player who happened to begin at the top would ever be recognised.
 
-Aegis and Gravity Seal are the same triangle inverted, so they sit closer
-together than any other pair here. Run `npm run runes` before nudging either.
+The pair to watch is **Ringfall and Aegis**, at 0.175 — a circle against an
+upright triangle. Aegis and Gravity Seal look like the risky pair, being the
+same triangle inverted, but they are the furthest apart of the three (0.467):
+reversal and rotation cannot turn a point-up triangle into a point-down one.
+The circle is the promiscuous shape, because a rotationally symmetric stroke
+aligns against nearly anything. Run `npm run runes` before reshaping any of
+them, and see [docs/spell-room.md](docs/spell-room.md) for why.
 
 ### Keyboard
 
