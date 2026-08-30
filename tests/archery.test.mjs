@@ -82,8 +82,10 @@ test("aim points from the string toward the bow", () => {
 test("the closed hand is the string, whichever side it is on", () => {
   const left = readBow([hand({ x: 0.2, pinch: CLOSED }), hand({ x: 0.6, pinch: OPEN })]);
   assert.equal(left.string.wrist.x, 0.2);
+  assert.equal(left.stringSide, 'left');
   const right = readBow([hand({ x: 0.2, pinch: OPEN }), hand({ x: 0.6, pinch: CLOSED })]);
   assert.equal(right.string.wrist.x, 0.6, "a left-handed archer needs no setting");
+  assert.equal(right.stringSide, 'right');
 });
 
 // ─── The shot ────────────────────────────────────────────────────────────────

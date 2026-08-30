@@ -28,13 +28,21 @@
        shows the top-left quarter of the render and everything looks off-centre
        for reasons that have nothing to do with the camera. */
     .arena-gl { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; }
-    .arena-overlay { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+    .arena-overlay { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
     .arena-video {
-      position: fixed; width: 1px; height: 1px; opacity: 0;
-      pointer-events: none; top: 0; left: 0;
+      position: fixed; z-index: 1; right: clamp(18px, 2.6vw, 38px); bottom: 54px;
+      width: clamp(176px, 18vw, 252px); aspect-ratio: 4 / 3;
+      object-fit: fill; opacity: 0; pointer-events: none;
+      border: 1px solid rgba(255,217,138,.45); border-radius: 3px;
+      background: #070912;
+      box-shadow: 0 14px 42px rgba(0,0,0,.5), 0 0 24px rgba(155,135,255,.08);
+      transform: scaleX(-1); transform-origin: center;
+      transition: opacity .24s ease;
     }
+    .arena-video.selfie-live { opacity: .78; }
+    body:has(.arena-start:not([hidden])) .arena-video { opacity: 0; }
     .arena-start {
-      position: fixed; inset: 0; z-index: 2; isolation: isolate;
+      position: fixed; inset: 0; z-index: 3; isolation: isolate;
       display: grid; grid-template-rows: auto 1fr auto;
       padding: clamp(26px, 3.6vw, 56px);
       color: #cfd9ec; font-family: "IBM Plex Mono", monospace;
@@ -115,14 +123,14 @@
     .arena-controls b { color: #d6d8dc; font-weight: 500; }
     .arena-sigil { color: rgba(255,217,138,.74); }
     .arena-error {
-      position: fixed; z-index: 4; left: 50%; bottom: 28px; transform: translateX(-50%);
+      position: fixed; z-index: 5; left: 50%; bottom: 28px; transform: translateX(-50%);
       width: min(520px, calc(100vw - 40px)); margin: 0; padding: 11px 14px;
       border: 1px solid #6b3b34; background: rgba(12,7,10,.9);
       color: #ff9c82; font: 500 11px/1.6 "IBM Plex Mono", monospace;
     }
     .arena-error[hidden] { display: none; }
     .arena-status {
-      position: fixed; z-index: 3; right: clamp(30px, 5vw, 72px); top: clamp(66px, 7vw, 104px);
+      position: fixed; z-index: 4; right: clamp(30px, 5vw, 72px); top: clamp(66px, 7vw, 104px);
       font: 500 9px "IBM Plex Mono", monospace; letter-spacing: .18em; color: #7b89a1;
       text-transform: uppercase;
       transition: opacity .3s ease;
@@ -148,6 +156,7 @@
       .arena-foot { font-size: 8px; }
       .arena-controls span:not(:first-child) { display: none; }
       .arena-status { right: 26px; top: 72px; }
+      .arena-video { right: 14px; bottom: 50px; width: min(42vw, 176px); }
     }
     @media (max-width: 480px) {
       .arena-actions { align-items: flex-start; flex-direction: column; }
@@ -197,7 +206,7 @@
 
     <footer class="arena-foot">
       <div class="arena-controls">
-        <span><b>WASD</b> Move</span><span><b>PINCH</b> Draw + cast</span><span><b>1—3</b> Choose rune</span>
+        <span><b>WASD</b> Move</span><span><b>1 HAND</b> Draw runes</span><span><b>2 HANDS</b> Draw bow</span>
       </div>
       <span class="arena-runes arena-sigil" data-arena-runes></span>
     </footer>

@@ -18,6 +18,14 @@ export const DUEL = Object.freeze({
   aegisCooldown: 5.5,
   gravityCost: 30,
   gravityCooldown: 6.5,
+  // The bow is an aimed alternative to Ringfall, so its first balance pass uses
+  // the same economy and damage envelope. Only aim, rather than a free discount,
+  // is allowed to distinguish it until the duel has been played by hand.
+  bowCost: 20,
+  bowCooldown: 2.4,
+  bowDamageMin: 12,
+  bowDamageMax: 34,
+  arrowSpeed: 105,
   botSpeed: 4.0,
   botWindup: 0.72,
   botRecovery: 2.5,

@@ -14,6 +14,11 @@ import { createMatch, updateMatch, damage, spendMana, disruptCore } from './aren
 import { createBeam } from './spells/beam.js';
 import { initTracker, getFrame, isReady, disposeTracker } from './spell-room/tracker.js';
 import { isPinching, updateCast, currentStroke, resetMagic, RUNES, pinchDebug } from './spell-room/magic.js';
+import { createBowState } from './spell-room/archery.js';
+import { createBowAim } from './spell-room/aim.js';
+import { createInputMode } from './spell-room/input-mode.js';
+import { createBowView, DUEL_BOW_MOUNT } from './arena/bow-view.js';
+import { raySphereDistance, rayVerticalCapsuleDistance } from './arena/shot.js';
 
 const GOLD = '#ffd98a';
 const VIOLET = '#9b87ff';
@@ -52,12 +57,14 @@ const playerPosition = new THREE.Vector3(0, 0, 14);
 const opponentPosition = new THREE.Vector3(0, 0, -12);
 const playerAvatar = createDuelist(scene, { colour: 0xffd98a, name: 'Lantern Duelist' });
 const opponentAvatar = createDuelist(scene, { colour: 0x9b87ff, name: 'Veil Rival' });
+const bowView = createBowView(playerAvatar.bowAnchor, DUEL_BOW_MOUNT);
+bowView.setVisible(false);
 playerAvatar.setPosition(playerPosition);
 opponentAvatar.setPosition(opponentPosition);
 let bot = createOpponentController(opponentPosition);
 
 let match = createMatch();
-const cooldowns = { ringfall: 0, aegis: 0, 'gravity-seal': 0 };
+const cooldowns = { ringfall: 0, aegis: 0, 'gravity-seal': 0, bow: 0 };
 let selectedRuneId = 'ringfall';
 let targetMode = 'rival';
 let botCastCount = 0;
@@ -153,6 +160,19 @@ async function loadMeshyDuelists() {
     setStatus(`Meshy model fallback: ${error.message}`);
   }
 }
+
+async function loadBow() {
+  const url = 'assets/models/arena/bow.glb';
+  try {
+    const response = await fetch(url, { method: 'HEAD' });
+    if (!response.ok) return;
+    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+    const gltf = await new GLTFLoader().loadAsync(url);
+    bowView.attachLimbs(gltf.scene);
+  } catch (error) {
+    setStatus(`bow model fallback: ${error.message}`);
+  }
+}
 let lastCast = null;
 let lastCastAt = -Infinity;
 let flashUntil = -Infinity;
@@ -163,6 +183,12 @@ let worldTime = 0;
 let playerCharging = false;
 let perfTime = 0;
 let perfFrames = 0;
+const bowState = createBowState();
+const bowAim = createBowAim();
+const inputMode = createInputMode();
+let bowRead = null;
+let bowMode = false;
+let bowStringSide = 'right';
 
 const FLASH_COLOUR = { cast: GOLD, fizzle: '#ff8b6b', overload: '#ff3d2e', blocked: '#6f7f9a', hit: '#b36cff' };
 
@@ -336,6 +362,104 @@ function botCast(target) {
   });
 }
 
+// ─── Bow shot ────────────────────────────────────────────────────────────────
+// The ray decides the hit at release; the mesh is feedback travelling along the
+// same sightline. Keeping those jobs separate prevents a low render frame from
+// changing whether a shot landed.
+const arrowGeometry = new THREE.CylinderGeometry(0.035, 0.035, 1.5, 6);
+arrowGeometry.rotateX(Math.PI / 2);
+const arrowMaterial = new THREE.MeshStandardMaterial({
+  color: 0xf3ead7, emissive: 0xffd98a, emissiveIntensity: 0.5, roughness: 0.4,
+});
+const arrows = [];
+const _bowNdc = new THREE.Vector3();
+const _bowRayOrigin = new THREE.Vector3();
+const _bowRayDirection = new THREE.Vector3();
+const _bowVisualOrigin = new THREE.Vector3();
+const _bowVisualDirection = new THREE.Vector3();
+const _bowFar = new THREE.Vector3();
+const _coreWorld = new THREE.Vector3();
+
+function spawnArrow(origin, direction) {
+  const mesh = new THREE.Mesh(arrowGeometry, arrowMaterial);
+  mesh.position.copy(origin);
+  mesh.lookAt(_bowFar.copy(origin).add(direction));
+  scene.add(mesh);
+  arrows.push({ mesh, direction: direction.clone(), life: 2.5 });
+}
+
+function updateArrows(dt) {
+  for (let i = arrows.length - 1; i >= 0; i--) {
+    const arrow = arrows[i];
+    arrow.mesh.position.addScaledVector(arrow.direction, DUEL.arrowSpeed * dt);
+    arrow.life -= dt;
+    if (arrow.life > 0) continue;
+    arrow.mesh.removeFromParent();
+    arrows.splice(i, 1);
+  }
+}
+
+function fireBow(power, now, reticle) {
+  if (match.phase !== 'playing' || cooldowns.bow > 0) {
+    flashUntil = now + 180;
+    flashKind = 'blocked';
+    setStatus('bow cooling down');
+    return false;
+  }
+  if (!spendMana(match, 'player', DUEL.bowCost)) {
+    flashUntil = now + 240;
+    flashKind = 'blocked';
+    setStatus('not enough mana');
+    return false;
+  }
+
+  const draw = clamp(power, 0, 1);
+  camera.updateMatrixWorld(true);
+  _bowNdc.set(reticle.x * 2 - 1, -(reticle.y * 2 - 1), 0.5).unproject(camera);
+  _bowRayOrigin.copy(camera.position);
+  _bowRayDirection.copy(_bowNdc).sub(_bowRayOrigin).normalize();
+
+  const bodyDistance = rayVerticalCapsuleDistance(
+    _bowRayOrigin, _bowRayDirection,
+    opponentPosition.x, opponentPosition.z,
+    opponentAvatar.radius, opponentAvatar.height - opponentAvatar.radius,
+    opponentAvatar.radius,
+  );
+  arena.cores.opponent.crystal.getWorldPosition(_coreWorld);
+  const coreDistance = raySphereDistance(_bowRayOrigin, _bowRayDirection, _coreWorld, 1.05);
+  const hitCore = coreDistance !== null && (bodyDistance === null || coreDistance < bodyDistance);
+  const hitBody = bodyDistance !== null && !hitCore;
+
+  playerAvatar.bowAnchor.getWorldPosition(_bowVisualOrigin);
+  _bowFar.copy(_bowRayOrigin).addScaledVector(_bowRayDirection, 48);
+  _bowVisualDirection.subVectors(_bowFar, _bowVisualOrigin).normalize();
+  spawnArrow(_bowVisualOrigin, _bowVisualDirection);
+
+  if (hitCore) {
+    disruptAndSpill('opponent');
+    setStatus('arrow struck the rival Core');
+  } else if (hitBody) {
+    if (spells.absorb('opponent', now)) {
+      setStatus('rival Aegis caught the arrow');
+    } else {
+      damage(match, 'opponent', lerp(DUEL.bowDamageMin, DUEL.bowDamageMax, draw));
+      opponentAvatar.flash();
+      setStatus('arrow hit');
+    }
+  } else {
+    setStatus('arrow missed');
+  }
+
+  cooldowns.bow = DUEL.bowCooldown;
+  lastCast = { name: 'Arrow', charge: draw };
+  lastCastAt = now;
+  if (hitBody || hitCore) {
+    flashUntil = now + 180;
+    flashKind = 'cast';
+  }
+  return true;
+}
+
 // ─── Third-person controller ─────────────────────────────────────────────────
 
 const keys = new Set();
@@ -364,6 +488,21 @@ addEventListener('keydown', event => {
   if (event.code === 'KeyJ') castPlayerSpell(selectedRuneId, 0.3, performance.now());
   if (event.code === 'KeyK') castPlayerSpell(selectedRuneId, 1, performance.now());
   if (event.code === 'KeyR' && match.phase === 'finished') resetRound();
+  // Camera-free QA for the body pose. Live tracking owns the same pose whenever
+  // it is on, so these keys only have an effect under ?nocam or after H turns the
+  // webcam off.
+  if (event.code === 'KeyB') {
+    debugBow = !debugBow;
+    setStatus(debugBow ? `bow up · draw ${debugDraw.toFixed(1)} · ${debugSide}` : 'bow down');
+  }
+  if (debugBow && (event.code === 'Comma' || event.code === 'Period')) {
+    debugDraw = clamp(debugDraw + (event.code === 'Period' ? DRAW_STEP : -DRAW_STEP), 0, 1);
+    setStatus(`draw ${debugDraw.toFixed(1)} · ${debugSide}`);
+  }
+  if (event.code === 'KeyM' && debugBow) {
+    debugSide = debugSide === 'right' ? 'left' : 'right';
+    setStatus(`draw ${debugDraw.toFixed(1)} · ${debugSide}`);
+  }
 });
 addEventListener('keyup', event => keys.delete(event.code));
 
@@ -377,6 +516,33 @@ addEventListener('mousemove', event => {
 
 function shortAngle(from, to) {
   return Math.atan2(Math.sin(to - from), Math.cos(to - from));
+}
+
+// ─── Draw pose, camera-free QA ────────────────────────────────────────────────
+//
+//   B        bow up / bow down
+//   , .      step the draw down and up
+//   M        mirror it — the stance follows whichever hand closed on the string,
+//            so the left-handed version has to be looked at too
+//
+// Stepped rather than held, because a pose is judged by parking it at a value
+// and looking, not by watching it flash past. The real driver is continuous.
+const DRAW_STEP = 0.1;
+let debugBow = false;
+let debugDraw = 0;
+let debugSide = 'right';
+
+function updateDebugBow() {
+  if (tracking) return;
+  bowMode = debugBow;
+  bowStringSide = debugSide;
+  bowRead = debugBow
+    ? { phase: 'nocked', draw: debugDraw, peak: debugDraw, spans: 0, stringSide: debugSide }
+    : null;
+  playerAvatar.drawBow(debugBow ? debugDraw : null, debugSide);
+  bowView.setNocked(debugBow);
+  bowView.setDraw(debugBow ? debugDraw : 0);
+  bowView.setVisible(debugBow && playerAvatar.drawing);
 }
 
 function movePlayer(dt, now) {
@@ -451,6 +617,7 @@ function resolveArenaCollision(position) {
 // the elbow must stay in front of the lens, the hand must stay on screen across
 // the whole drawing area, and the forearm must stay under half a screen wide.
 let castFraming = 0;
+let bowFraming = 0;
 const CAST_BACK = 1.00;    // behind the shoulder
 const CAST_UP = 3.46;      // above the duelist's feet
 const CAST_SIDE = 0.5;     // toward the drawing shoulder
@@ -458,11 +625,19 @@ const CAST_LOOK_Y = 2.61;
 const CAST_LOOK_FWD = 0.72;
 const DUEL_FOV = 58;
 const CAST_FOV = 62;
+const BOW_BACK = 5.0;
+const BOW_UP = 3.15;
+const BOW_SIDE = 1.1;
+const BOW_LOOK_Y = 2.05;
+const BOW_LOOK_FWD = 6.5;
+const BOW_FOV = 58;
 const _flat = new THREE.Vector3();
 const _chasePos = new THREE.Vector3();
 const _chaseLook = new THREE.Vector3();
 const _castPos = new THREE.Vector3();
 const _castLook = new THREE.Vector3();
+const _bowPos = new THREE.Vector3();
+const _bowLook = new THREE.Vector3();
 // Where the casting view WILL be, available even while the render camera is
 // still swinging into it. The hand target is unprojected through this rather
 // than through the live camera: at the start of a cast the live camera is still
@@ -471,12 +646,14 @@ const _castLook = new THREE.Vector3();
 const castCamera = new THREE.PerspectiveCamera(CAST_FOV, 1, 0.1, 180);
 
 function updateCamera(dt) {
-  const want = playerAvatar.reaching ? 1 : 0;
-  castFraming += (want - castFraming) * Math.min(1, dt * 9);
+  const wantCast = playerAvatar.reaching && !bowMode ? 1 : 0;
+  const wantBow = bowMode ? 1 : 0;
+  castFraming += (wantCast - castFraming) * Math.min(1, dt * 9);
+  bowFraming += (wantBow - bowFraming) * Math.min(1, dt * 7);
 
   // A slightly wider lens while casting, to keep the whole drawing arc in frame
   // from this much closer camera.
-  const fov = lerp(DUEL_FOV, CAST_FOV, castFraming);
+  const fov = lerp(lerp(DUEL_FOV, CAST_FOV, castFraming), BOW_FOV, bowFraming);
   if (Math.abs(camera.fov - fov) > 0.01) {
     camera.fov = fov;
     camera.updateProjectionMatrix();
@@ -499,35 +676,69 @@ function updateCamera(dt) {
   _castLook.copy(playerPosition).addScaledVector(_flat, CAST_LOOK_FWD);
   _castLook.y += CAST_LOOK_Y;
 
+  // A close third-person view, never first person: the rig's elbow and forearm
+  // need to stay in front of the lens. Mirror with the actual string hand so a
+  // left-handed stance gets the same composition. Look from the bow side;
+  // from the string shoulder the forearm sits directly
+  // between the lens and the face, which hid both the grip and the arrow.
+  const shoulderSide = bowStringSide === 'right' ? -1 : 1;
+  _bowPos.copy(playerPosition)
+    .addScaledVector(_flat, -BOW_BACK)
+    .addScaledVector(_right, BOW_SIDE * shoulderSide);
+  _bowPos.y += BOW_UP;
+  _bowLook.copy(playerPosition).addScaledVector(_flat, BOW_LOOK_FWD);
+  _bowLook.y += BOW_LOOK_Y;
+
   castCamera.aspect = camera.aspect;
   castCamera.position.copy(_castPos);
   castCamera.lookAt(_castLook);
   castCamera.updateProjectionMatrix();
   castCamera.updateMatrixWorld(true);
 
-  _cameraPosition.lerpVectors(_chasePos, _castPos, castFraming);
-  _look.lerpVectors(_chaseLook, _castLook, castFraming);
+  _cameraPosition.lerpVectors(_chasePos, _castPos, castFraming).lerp(_bowPos, bowFraming);
+  _look.lerpVectors(_chaseLook, _castLook, castFraming).lerp(_bowLook, bowFraming);
   // Snappier the further into the casting view we are; the duelling chase camera
   // wants the lazy follow, the swap onto the shoulder does not.
-  camera.position.lerp(_cameraPosition, lerp(0.18, 0.55, castFraming));
+  camera.position.lerp(_cameraPosition, lerp(0.18, 0.55, Math.max(castFraming, bowFraming)));
   camera.lookAt(_look);
 }
 
 // ─── Webcam ──────────────────────────────────────────────────────────────────
 
+function setSelfieVisible(visible) {
+  video?.classList.toggle('selfie-live', Boolean(visible));
+}
+
+function reportTrackerStage(stage) {
+  setStatus(stage);
+  // The stream is already attached by the time this stage arrives. Showing it
+  // while the model downloads gives the player immediate proof that permission
+  // worked, instead of leaving a blank corner for another thirty seconds.
+  if (stage !== 'asking for the camera') setSelfieVisible(true);
+}
+
 async function toggleTracking() {
   if (tracking) {
     tracking = false;
     resetMagic();
+    inputMode.reset();
+    bowState.reset();
+    bowAim.reset();
+    bowRead = null;
+    bowMode = false;
+    playerAvatar.drawBow(null);
+    bowView.setVisible(false);
     disposeTracker();
+    setSelfieVisible(false);
     setStatus('webcam off');
     return;
   }
   try {
-    await initTracker(video, stage => setStatus(stage));
+    await initTracker(video, reportTrackerStage);
     tracking = true;
     setStatus('hand casting ready');
   } catch (error) {
+    setSelfieVisible(false);
     setStatus(`camera: ${error.message}`);
   }
 }
@@ -539,13 +750,15 @@ startButton?.addEventListener('click', async () => {
   resize();
   requestAnimationFrame(loop);
   if (NO_CAMERA) {
+    setSelfieVisible(false);
     setStatus('keyboard casting ready · webcam skipped for QA');
     return;
   }
   try {
-    await initTracker(video, stage => setStatus(stage));
+    await initTracker(video, reportTrackerStage);
     tracking = true;
   } catch (error) {
+    setSelfieVisible(false);
     if (errorLine) {
       errorLine.hidden = false;
       errorLine.textContent = error.message;
@@ -557,9 +770,49 @@ startButton?.addEventListener('click', async () => {
 function updateHand(now) {
   if (!tracking) {
     playerCharging = false;
+    updateDebugBow();
     return;
   }
   const frame = getFrame();
+  const mode = inputMode.update(frame.hands);
+
+  if (mode.mode === 'bow') {
+    if (mode.changed) {
+      resetMagic();
+      playerAvatar.reach(null);
+      bowAim.reset();
+    }
+    bowMode = true;
+    bowRead = bowState.update(frame.hands, now);
+    playerCharging = bowRead.phase === 'nocked' && bowRead.draw > 0.2;
+    bowStringSide = bowRead.stringSide ?? bowStringSide;
+    playerAvatar.drawBow(bowRead.draw, bowStringSide);
+    bowView.setVisible(playerAvatar.drawing);
+    bowView.setNocked(bowRead.phase === 'nocked');
+    bowView.setDraw(bowRead.phase === 'nocked' ? bowRead.draw : 0);
+
+    if (bowRead.phase === 'nocked' && bowRead.bowWrist) {
+      bowAim.update(bowRead.bowWrist, bowRead.draw, now);
+    }
+    if (bowRead.event?.type === 'loosed') {
+      fireBow(bowRead.event.power, now, bowAim.reticle);
+      bowAim.reset();
+    } else if (bowRead.phase !== 'nocked') {
+      bowAim.reset();
+    }
+    drawBowLayer(frame, bowRead);
+    return;
+  }
+
+  if (mode.changed || bowMode) {
+    bowState.reset();
+    bowAim.reset();
+    bowRead = null;
+    bowMode = false;
+    playerAvatar.drawBow(null);
+    bowView.setVisible(false);
+    resetMagic();
+  }
   const gate = isPinching(frame.tracked ? frame.landmarks : null, frame.handScale, now);
   const cast = updateCast(gate && frame.tracked, frame.tip, now);
   playerAvatar.reach(gate && frame.tracked ? handTarget(frame.tip) : null, cast.charge);
@@ -587,6 +840,7 @@ function loop(now) {
 
   const playerSpeed = movePlayer(dt, now);
   playerAvatar.setPosition(playerPosition);
+  updateHand(now);
   playerAvatar.update(dt, playerSpeed);
 
   const spellState = spells.update(dt, now, { player: playerPosition, opponent: opponentPosition });
@@ -618,8 +872,8 @@ function loop(now) {
   for (const id of Object.keys(cooldowns)) cooldowns[id] = Math.max(0, cooldowns[id] - dt);
   playerBeam.update(dt);
   opponentBeam.update(dt);
+  updateArrows(dt);
   updateCamera(dt);
-  updateHand(now);
 
   renderer.render(scene, camera);
   performanceGovernor.update(dt);
@@ -633,6 +887,7 @@ function loop(now) {
     perfFrames = 0;
   }
   drawHud(now, botState);
+  drawSelfie(getFrame());
   requestAnimationFrame(loop);
 }
 
@@ -650,6 +905,69 @@ function resetRound() {
 
 // ─── Overlay ──────────────────────────────────────────────────────────────────
 
+const HAND_CONNECTIONS = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [0, 5], [5, 6], [6, 7], [7, 8],
+  [5, 9], [9, 10], [10, 11], [11, 12],
+  [9, 13], [13, 14], [14, 15], [15, 16],
+  [13, 17], [17, 18], [18, 19], [19, 20], [17, 0],
+];
+
+function drawSelfie(frame) {
+  if (!tracking || !video?.classList.contains('selfie-live')) return;
+  const rect = video.getBoundingClientRect();
+  if (rect.width < 2 || rect.height < 2) return;
+
+  const hands = frame.hands ?? [];
+  const mode = hands.length === 2 ? 'BOW' : hands.length === 1 ? 'RUNES' : 'SHOW HANDS';
+  const x = point => rect.left + point.x * rect.width;
+  const y = point => rect.top + point.y * rect.height;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(rect.left, rect.top, rect.width, rect.height);
+  ctx.clip();
+
+  for (const hand of hands) {
+    const landmarks = hand.landmarks;
+    if (!landmarks?.length) continue;
+    const colour = hand.side === 'right' ? GOLD : hand.side === 'left' ? '#8cc9ff' : '#d9e2f2';
+
+    ctx.beginPath();
+    for (const [from, to] of HAND_CONNECTIONS) {
+      ctx.moveTo(x(landmarks[from]), y(landmarks[from]));
+      ctx.lineTo(x(landmarks[to]), y(landmarks[to]));
+    }
+    ctx.strokeStyle = colour;
+    ctx.globalAlpha = frame.stale ? 0.34 : 0.82;
+    ctx.lineWidth = 1.35;
+    ctx.stroke();
+
+    ctx.fillStyle = colour;
+    for (const point of landmarks) {
+      ctx.beginPath();
+      ctx.arc(x(point), y(point), 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    if (hand.side) {
+      ctx.globalAlpha = 1;
+      ctx.font = "700 9px 'IBM Plex Mono', monospace";
+      ctx.textAlign = 'center';
+      ctx.fillText(hand.side[0].toUpperCase(), x(hand.wrist), y(hand.wrist) + 14);
+    }
+  }
+
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = 'rgba(5,6,12,.72)';
+  ctx.fillRect(rect.left, rect.top, rect.width, 24);
+  ctx.font = "500 8px 'IBM Plex Mono', monospace";
+  ctx.textAlign = 'left';
+  ctx.fillStyle = hands.length ? GOLD : '#8d9ab4';
+  ctx.fillText(`MIRROR · ${hands.length} HAND${hands.length === 1 ? '' : 'S'} · ${mode}`, rect.left + 8, rect.top + 15);
+  ctx.restore();
+}
+
 // Where the duelist's hand has to be in the world for it to appear exactly under
 // the stroke the player is watching. Unprojecting the fingertip is the only way
 // the two line up: the earlier version mapped the stroke onto a small square in
@@ -663,6 +981,57 @@ function handTarget(tip) {
   _handTarget.set(tip.x * 2 - 1, -(tip.y * 2 - 1), 0.5).unproject(castCamera);
   return _handTarget.sub(castCamera.position).normalize()
     .multiplyScalar(HAND_DEPTH).add(castCamera.position);
+}
+
+function drawBowLayer(frame, bow) {
+  const width = innerWidth;
+  const height = innerHeight;
+
+  // The two tracked wrists stay visible as a quiet diagnostic. If the draw
+  // jumps, this immediately distinguishes a tracking dropout from bow maths.
+  if (frame.hands?.length === 2) {
+    const [a, b] = frame.hands;
+    ctx.beginPath();
+    ctx.moveTo(a.wrist.x * width, a.wrist.y * height);
+    ctx.lineTo(b.wrist.x * width, b.wrist.y * height);
+    ctx.strokeStyle = 'rgba(255,230,184,.28)';
+    ctx.lineWidth = 1.25;
+    ctx.stroke();
+    for (const hand of frame.hands) {
+      ctx.beginPath();
+      ctx.arc(hand.wrist.x * width, hand.wrist.y * height, 5, 0, Math.PI * 2);
+      ctx.fillStyle = hand.side === bow.stringSide ? GOLD : '#8ab4ff';
+      ctx.fill();
+    }
+  }
+
+  if (bow.phase !== 'nocked') return;
+  const reticle = bowAim.reticle;
+  const x = reticle.x * width;
+  const y = reticle.y * height;
+  const radius = 13 + bow.draw * 15;
+  ctx.strokeStyle = GOLD;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(x, y, radius + 5, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * bow.draw);
+  ctx.strokeStyle = 'rgba(255,217,138,.45)';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x - 23, y); ctx.lineTo(x - 8, y);
+  ctx.moveTo(x + 8, y); ctx.lineTo(x + 23, y);
+  ctx.moveTo(x, y - 23); ctx.lineTo(x, y - 8);
+  ctx.moveTo(x, y + 8); ctx.lineTo(x, y + 23);
+  ctx.strokeStyle = GOLD;
+  ctx.stroke();
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.font = "500 10px 'IBM Plex Mono', monospace";
+  ctx.fillStyle = GOLD;
+  ctx.fillText(`${Math.round(bow.draw * 100)}%`, x, y + radius + 19);
+  ctx.restore();
 }
 
 function drawHandLayer(frame, gate, cast) {
@@ -747,7 +1116,11 @@ function drawHandLayer(frame, gate, cast) {
       ctx.fillText(cast.rune.name.toUpperCase(), x, y - 48);
       ctx.font = "500 10px 'IBM Plex Mono', monospace";
       ctx.fillStyle = cast.overloading ? '#ff6a4d' : '#9aa6bd';
-      ctx.fillText(cast.overloading ? 'RELEASE NOW' : `${Math.round(cast.charge * 100)}% · RELEASE TO CAST`, x, y - 32);
+      ctx.fillText(cast.overloading
+        ? 'RELEASE NOW'
+        : cast.assisted
+          ? 'LOOP LOCKED · RELEASE TO CAST'
+          : `${Math.round(cast.charge * 100)}% · RELEASE TO CAST`, x, y - 32);
       ctx.restore();
     }
   }
@@ -867,19 +1240,30 @@ function drawHud(now, botState) {
   ctx.font = "500 11px 'IBM Plex Mono', monospace";
   ctx.fillStyle = '#7f899f';
   const selected = RUNES.find(rune => rune.id === selectedRuneId)?.name ?? 'Ringfall';
-  const cooldown = cooldowns[selectedRuneId] > 0 ? ` · cooldown ${cooldowns[selectedRuneId].toFixed(1)}` : '';
-  ctx.fillText(`WASD · 1/2/3 ${selected} · TAB ${targetMode} · J/K cast${cooldown}`, 24, height - 24);
+  const activeCooldown = bowMode ? cooldowns.bow : cooldowns[selectedRuneId];
+  const cooldown = activeCooldown > 0 ? ` · cooldown ${activeCooldown.toFixed(1)}` : '';
+  ctx.fillText(bowMode
+    ? `WASD · BOW ${bowStringSide.toUpperCase()} STRING · RELEASE TO SHOOT${cooldown}`
+    : `WASD · 1/2/3 ${selected} · TAB ${targetMode} · J/K cast${cooldown}`,
+  24, height - 24);
   if (lastCast && now - lastCastAt < 1800) {
     ctx.fillStyle = GOLD;
     ctx.fillText(`${lastCast.name} ${Math.round(lastCast.charge * 100)}%`, 24, height - 44);
   }
-  drawRuneLegend(height);
+  if (!bowMode) drawRuneLegend(height);
 
   if (tracking) {
-    const debug = pinchDebug();
     ctx.textAlign = 'right';
-    ctx.fillStyle = debug.calibrated ? '#66738d' : '#b8894a';
-    ctx.fillText(debug.calibrated ? (debug.closed ? 'PINCH CLOSED' : 'PINCH OPEN') : 'OPEN + CLOSE TO CALIBRATE', width - 24, height - 24);
+    if (bowMode) {
+      ctx.fillStyle = bowRead?.phase === 'nocked' ? GOLD : '#8ab4ff';
+      ctx.fillText(bowRead?.phase === 'nocked'
+        ? `BOW ${Math.round((bowRead.draw ?? 0) * 100)}% · ${bowRead.spans.toFixed(2)} SPANS`
+        : 'CLOSE ONE HAND TO NOCK', width - 24, height - 24);
+    } else {
+      const debug = pinchDebug();
+      ctx.fillStyle = debug.calibrated ? '#66738d' : '#b8894a';
+      ctx.fillText(debug.calibrated ? (debug.closed ? 'PINCH CLOSED' : 'PINCH OPEN') : 'OPEN + CLOSE TO CALIBRATE', width - 24, height - 24);
+    }
   }
 
   if (match.phase === 'finished') {
@@ -918,7 +1302,11 @@ addEventListener('resize', resize);
 addEventListener('beforeunload', () => {
   running = false;
   coverVideo?.pause();
+  setSelfieVisible(false);
   disposeTracker();
+  for (const arrow of arrows) arrow.mesh.removeFromParent();
+  arrowGeometry.dispose();
+  arrowMaterial.dispose();
   playerBeam.dispose();
   opponentBeam.dispose();
   spells.dispose();
@@ -947,3 +1335,4 @@ setStatus(isReady() ? 'ready' : 'keyboard ready');
 resize();
 void loadMeshyDuelists();
 void loadArenaProps();
+void loadBow();

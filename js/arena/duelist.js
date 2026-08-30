@@ -24,6 +24,42 @@ const TURN_RATE = 11;
 // How fast the arm takes over and lets go.
 const REACH_FADE = 14;
 
+// ── The draw ─────────────────────────────────────────────────────────────────
+//
+// A drawn bow is a pose that has to track `draw` continuously, which is why it
+// is solved rather than played. A baked clip could only be scrubbed by draw,
+// and scrubbing a clip backwards through its own easing does not look like a
+// bow coming back -- it looks like a video rewinding.
+//
+// Everything below is a fraction of the arm's own measured length, not a world
+// distance, so it survives the model being regenerated at a different scale.
+// Local axes here: +Z is forward (see face()), +Y up, and +X is the duelist's
+// LEFT -- screen-right is -X, which is why `side` is negated for a right hand.
+const DRAW_POSE = {
+  // The bow arm is nearly straight. Not fully: at exactly upper+fore the IK's
+  // bend axis is undefined and the elbow pops, and a real archer keeps a soft
+  // elbow anyway.
+  bowExtend: 0.90,
+  bowRise: 0.06,      // slightly above the shoulder line
+  bowSpread: 0.10,    // out toward the bow side
+
+  // Where the string hand ends up at full draw: the classic anchor, at the jaw.
+  // `anchorSide` is negative because the hand comes IN toward the face, not out
+  // past the shoulder -- measured, the first guess put the wrist at x -0.509
+  // against a shoulder at -0.274, which is an elbow-out chicken wing rather
+  // than an anchor.
+  anchorForward: 0.06,
+  anchorRise: 0.21,
+  anchorSide: -0.14,
+
+  // At slack the hands are together at the bow, which is what nocking looks
+  // like. The whole pose is a lerp between here and the anchor, so the body
+  // reads the draw the player is actually holding.
+  nockedForward: 0.66,
+
+  fade: 12,           // how fast the pose takes the arms over and gives them back
+};
+
 // Signed shortest angle from `from` to `to`, so a turn never takes the long way.
 const shortAngle = (from, to) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
 
@@ -135,12 +171,31 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
   let stride = 0;
   let hit = 0;
   let targetYaw = 0;
-  let armIK = null;
+  let armIK = null;        // the right arm — the rune hand, and the bow's string hand
+  let leftIK = null;       // the left arm, only ever used by the draw
   let castSpark = null;
   let chargeGlow = 0;
   const _sparkPos = new THREE.Vector3();
+  const _bowHand = new THREE.Vector3();
+  const _stringHand = new THREE.Vector3();
+  const _nock = new THREE.Vector3();
+  // A stable body-space parent for the bow mesh. Following the solved wrist
+  // position without inheriting the terminal hand bone's twist keeps the limbs
+  // vertical and the arrow aligned with the duelist's forward axis.
+  const bowAnchor = new THREE.Group();
+  bowAnchor.name = `${name} bow anchor`;
+  bowAnchor.rotation.y = Math.PI; // bow-view's arrow is local -Z; the duelist faces +Z
+  root.add(bowAnchor);
   let armReach = 0;          // arm length, measured from the rig
-  let shoulderLocal = null;  // shoulder position in root space
+  let shoulderLocal = null;  // right shoulder position in root space
+  let leftShoulderLocal = null;
+  // The draw, or null when the bow is down. Held as a whole pose rather than a
+  // number so the side can change: archery.js picks the string hand from which
+  // hand the player actually closed, and the body should copy that rather than
+  // insist on a right-handed stance.
+  let drawPose = null;
+  let drawWeight = 0;
+  const lastDraw = { draw: 0, stringSide: 'right' };
   let reachTarget = null;    // world Vector3, or null to let the animation have the arm back
   let reachWeight = 0;
   const lastReach = new THREE.Vector3();   // kept so the fade-out has somewhere to go
@@ -172,6 +227,7 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
 
   return {
     root,
+    bowAnchor,
     radius: 0.75,
     height: 3.45,
     setPosition(position) { root.position.copy(position); },
@@ -201,6 +257,25 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
       }
     },
     get reaching() { return reachWeight > 0.01; },
+    /**
+     * Hold a bow at `draw` (0 slack, 1 full), with the string on `stringSide`.
+     * Pass null to put it away and give the arms back to the animation.
+     *
+     * Deliberately not a world point like reach(): the draw is a POSE, and the
+     * two wrists are not independent -- the string hand's whole meaning is
+     * where it sits relative to the bow hand. Handing the caller two targets
+     * would let them drift into positions no archer can hold.
+     */
+    drawBow(draw, stringSide = 'right') {
+      if (draw === null || draw === undefined) {
+        drawPose = null;
+        return;
+      }
+      lastDraw.draw = clamp(draw, 0, 1);
+      lastDraw.stringSide = stringSide === 'left' ? 'left' : 'right';
+      drawPose = lastDraw;
+    },
+    get drawing() { return drawWeight > 0.01; },
     flash() {
       hit = 1;
       // A stagger outranks whatever the body was doing, a cast included.
@@ -240,6 +315,11 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
       root.add(imported);
 
       armIK = createArmIK(imported, { shoulder: 'RightArm', elbow: 'RightForeArm', wrist: 'RightHand' });
+      // The bow needs both arms: one holds it out, the other pulls the string.
+      // The rune hand only ever needed the right, which is why armIK stayed
+      // singular for so long -- it is kept as the right chain so nothing that
+      // reaches has to change.
+      leftIK = createArmIK(imported, { shoulder: 'LeftArm', elbow: 'LeftForeArm', wrist: 'LeftHand' });
       if (armIK) {
         root.updateMatrixWorld(true);
         const shoulder = new THREE.Vector3();
@@ -252,6 +332,12 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
         shoulderLocal = root.worldToLocal(shoulder.clone());
         castSpark = buildCastSpark(colour);
         root.add(castSpark.group);
+      }
+      if (leftIK) {
+        root.updateMatrixWorld(true);
+        const shoulder = new THREE.Vector3();
+        leftIK.bones.shoulder.getWorldPosition(shoulder);
+        leftShoulderLocal = root.worldToLocal(shoulder.clone());
       }
 
       const accent = new THREE.Mesh(
@@ -310,8 +396,56 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
       }
       // After the mixer, never before: the clip writes the arm's bones every
       // frame, so IK applied first would simply be overwritten.
+      drawWeight += ((drawPose ? 1 : 0) - drawWeight) * Math.min(1, dt * DRAW_POSE.fade);
+      if (armIK && leftIK && shoulderLocal && leftShoulderLocal && drawWeight > 0.01) {
+        root.updateMatrixWorld(true);
+        // Which physical arm does which job. `side` is +1 toward the duelist's
+        // left, because local +X is its left (see face()).
+        const stringOnRight = lastDraw.stringSide === 'right';
+        const stringIK = stringOnRight ? armIK : leftIK;
+        const bowIK = stringOnRight ? leftIK : armIK;
+        const stringShoulder = stringOnRight ? shoulderLocal : leftShoulderLocal;
+        const bowShoulder = stringOnRight ? leftShoulderLocal : shoulderLocal;
+        const stringSign = stringOnRight ? -1 : 1;
+        const bowSign = -stringSign;
+
+        // The bow arm holds still; only the string hand travels. That is what
+        // a draw is, and animating both would read as a shrug.
+        _bowHand.set(
+          bowShoulder.x + bowSign * armReach * DRAW_POSE.bowSpread,
+          bowShoulder.y + armReach * DRAW_POSE.bowRise,
+          bowShoulder.z + armReach * DRAW_POSE.bowExtend,
+        );
+
+        // Slack: the string hand is up at the bow, which is what nocking looks
+        // like. Full draw: back at the anchor beside the jaw.
+        _nock.set(
+          _bowHand.x,
+          _bowHand.y,
+          bowShoulder.z + armReach * DRAW_POSE.nockedForward,
+        );
+        _stringHand.set(
+          stringShoulder.x + stringSign * armReach * DRAW_POSE.anchorSide,
+          stringShoulder.y + armReach * DRAW_POSE.anchorRise,
+          stringShoulder.z + armReach * DRAW_POSE.anchorForward,
+        );
+        _stringHand.lerpVectors(_nock, _stringHand, lastDraw.draw);
+
+        bowAnchor.position.copy(_bowHand);
+
+        // Solved, then re-read: the second solve needs the first arm's bones to
+        // have been written through to matrixWorld, or it aims at a stale pose.
+        bowIK.solve(root.localToWorld(_bowHand), drawWeight);
+        root.updateMatrixWorld(true);
+        stringIK.solve(root.localToWorld(_stringHand), drawWeight);
+      }
+
       if (armIK) {
-        reachWeight += ((reachTarget ? 1 : 0) - reachWeight) * Math.min(1, dt * REACH_FADE);
+        // The bow owns the right arm while it is up, so the rune reach has to
+        // let go of it -- otherwise a stale reach target fights the anchor and
+        // the arm sits between the two, drawing nothing and holding nothing.
+        const reachWanted = reachTarget && drawWeight <= 0.01 ? 1 : 0;
+        reachWeight += (reachWanted - reachWeight) * Math.min(1, dt * REACH_FADE);
         if (reachWeight > 0.01) {
           root.updateMatrixWorld(true);
           armIK.solve(lastReach, reachWeight);

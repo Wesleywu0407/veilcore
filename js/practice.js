@@ -9,7 +9,7 @@ import * as THREE from 'three';
 import { buildEnvironment } from './arena/scene.js';
 import { initTracker, getFrame, disposeTracker } from './spell-room/tracker.js';
 import { createBowState, BOW } from './spell-room/archery.js';
-import { makeOneEuro } from './spell-room/one-euro.js';
+import { createBowAim, AIM } from './spell-room/aim.js';
 import { createBowView } from './arena/bow-view.js';
 
 const GOLD = '#ffd98a';
@@ -24,17 +24,6 @@ const DIM = '#7f899f';
 // the bow hand sits at the moment the string is nocked becomes the centre of the
 // screen, and moving it from there steers the reticle. That works from any
 // stance, needs no calibration step, and lets a small movement cover the range.
-const AIM_GAIN = 2.6;
-
-// A wrist is not a mouse. Raw landmarks jitter about 2% of frame width even when
-// the hand is still, and the aim gain multiplies whatever survives, so an
-// unfiltered reticle shakes. Two One Euro filters rather than one: at full draw
-// you are holding a pose and want the reticle dead, while at slack you are still
-// swinging the bow around and want it to keep up. Blending between them by draw
-// gets both without a cutoff that has to be right for two different jobs.
-const AIM_QUICK = { minCutoff: 0.9, beta: 0.05, dCutoff: 1.0 };
-const AIM_STEADY = { minCutoff: 0.18, beta: 0.05, dCutoff: 1.0 };
-
 // Drawing narrows the lens. It is what an archer does with their attention, and
 // it earns its keep mechanically: the reticle's screen-space shake stays the
 // same size while the world angle behind it shrinks, so a full draw is genuinely
@@ -161,14 +150,11 @@ function spawnArrow(origin, direction, speed) {
 // ─── State ───────────────────────────────────────────────────────────────────
 
 const bowState = createBowState();
+const bowAim = createBowAim();
 let running = false;
 let tracking = false;
 let status = 'idle';
-let aimOrigin = null;            // bow-hand position captured when the string is nocked
-let lastPhase = 'idle';
-const reticle = { x: 0.5, y: 0.5 };
-const aimQuickX = makeOneEuro(AIM_QUICK), aimQuickY = makeOneEuro(AIM_QUICK);
-const aimSteadyX = makeOneEuro(AIM_STEADY), aimSteadyY = makeOneEuro(AIM_STEADY);
+const reticle = bowAim.reticle;
 const lerp = (a, b, t) => a + (b - a) * t;
 const shots = { fired: 0, hit: 0, lastPower: 0, lastMiss: null, lastRing: null };
 let cvFrames = 0, cvAt = 0, cvHz = 0, lastFrameAt = 0;
@@ -247,18 +233,11 @@ function loop(now) {
     bow = bowState.update(frame.hands, now);
 
     if (bow.phase === 'nocked' && bow.bowWrist) {
-      // Whichever hand archery.js decided is on the bow — not a second guess
-      // made here, which would drift from it the moment the grip is ambiguous.
-      if (!aimOrigin) {
-        aimOrigin = { x: bow.bowWrist.x, y: bow.bowWrist.y };
-        for (const f of [aimQuickX, aimQuickY, aimSteadyX, aimSteadyY]) f.reset();
-      }
-      const rawX = clamp01(0.5 + (bow.bowWrist.x - aimOrigin.x) * AIM_GAIN);
-      const rawY = clamp01(0.5 + (bow.bowWrist.y - aimOrigin.y) * AIM_GAIN);
-      reticle.x = lerp(aimQuickX.filter(rawX, now), aimSteadyX.filter(rawX, now), bow.draw);
-      reticle.y = lerp(aimQuickY.filter(rawY, now), aimSteadyY.filter(rawY, now), bow.draw);
+      // Whichever hand archery.js chose stays authoritative all the way through
+      // the shared aiming controller; the host never guesses handedness again.
+      bowAim.update(bow.bowWrist, bow.draw, now);
     } else {
-      aimOrigin = null;
+      bowAim.reset();
     }
 
     bowView.setVisible(frame.hands?.length === 2);
@@ -270,7 +249,6 @@ function loop(now) {
       camera.fov = fov;
       camera.updateProjectionMatrix();
     }
-    lastPhase = bow.phase;
     if (bow.event?.type === 'loosed') loose(bow.event.power);
   }
 
@@ -317,7 +295,7 @@ function drawPanel(frame, bow) {
     line('both hands in frame', 34, 84, '#b8894a');
     line('to read a draw', 34, 102, '#b8894a');
   }
-  line(`fov ${camera.fov.toFixed(0)}°   gain ${AIM_GAIN}`, 34, 192, '#5d6b86', 10);
+  line(`fov ${camera.fov.toFixed(0)}°   gain ${AIM.gain}`, 34, 192, '#5d6b86', 10);
   line(`DRAW_MIN ${BOW.DRAW_MIN}   DRAW_FULL ${BOW.DRAW_FULL}`, 34, 206, '#5d6b86', 10);
   line(`tracking ${cvHz.toFixed(0)} Hz`, 34, 222, cvHz > 20 ? '#5d6b86' : '#b8894a', 10);
 

@@ -90,6 +90,16 @@ export const TUNE = {
   // them. This is the one to raise if the wrong spell ever fires; raising the
   // floor for that would be treating the wrong symptom.
   SCORE_MARGIN: 0.05,
+
+  // Ringfall gets one extra piece of evidence: a genuinely closed, round loop
+  // can lock the moment it returns to its start. This is not a lower score
+  // floor. A measured 0.65-aspect ellipse has radial variation 0.151, while
+  // Aegis and Gravity Seal sit at 0.232 and 0.230; 0.18 is the gap between
+  // them. The other limits refuse open arcs, flat loops and backtracking.
+  RING_CLOSE_MAX: 0.20,       // endpoint gap / bounding-box diagonal
+  RING_ASPECT_MIN: 0.62,      // short side / long side
+  RING_RADIAL_CV_MAX: 0.18,   // radial standard deviation / mean radius
+  RING_WINDING_MIN: 0.82,     // revolutions around the loop centre
 };
 
 // ─── Rune templates ───────────────────────────────────────────────────────────
@@ -568,6 +578,57 @@ function scoreAgainst(candidate, rune) {
 }
 
 /**
+ * Independent evidence that a stroke is a Ringfall loop.
+ *
+ * Template matching is deliberately strict, but a live hand often reaches the
+ * start of a circle and then drags a tail while waiting for the pinch gate to
+ * release. Detect the useful instant -- the loop closing -- before that tail
+ * exists. Radial variation is what keeps the two triangular runes out.
+ */
+export function ringLoopAssist(rawPoints) {
+  const points = rawPoints ?? [];
+  if (points.length < TUNE.MIN_POINTS) return null;
+  const rawBox = boundingBox(points);
+  const diagonal = Math.hypot(rawBox.w, rawBox.h);
+  if (diagonal < TUNE.MIN_DIAGONAL || pathLength(points) < TUNE.MIN_PATH) return null;
+
+  const sampled = resample(points, TUNE.RESAMPLE_N);
+  const box = boundingBox(sampled);
+  const longSide = Math.max(box.w, box.h, 1e-6);
+  const aspect = Math.min(box.w, box.h) / longSide;
+  const closure = dist(sampled[0], sampled.at(-1)) / Math.max(Math.hypot(box.w, box.h), 1e-6);
+
+  let cx = 0;
+  let cy = 0;
+  for (const point of sampled) {
+    cx += point.x;
+    cy += point.y;
+  }
+  cx /= sampled.length;
+  cy /= sampled.length;
+
+  const radii = sampled.map(point => Math.hypot(point.x - cx, point.y - cy));
+  const meanRadius = radii.reduce((sum, radius) => sum + radius, 0) / radii.length;
+  const variance = radii.reduce((sum, radius) => sum + (radius - meanRadius) ** 2, 0) / radii.length;
+  const radialVariation = Math.sqrt(variance) / Math.max(meanRadius, 1e-6);
+
+  let angle = Math.atan2(sampled[0].y - cy, sampled[0].x - cx);
+  let winding = 0;
+  for (let i = 1; i < sampled.length; i++) {
+    const next = Math.atan2(sampled[i].y - cy, sampled[i].x - cx);
+    winding += Math.atan2(Math.sin(next - angle), Math.cos(next - angle));
+    angle = next;
+  }
+  const revolutions = Math.abs(winding) / (Math.PI * 2);
+  const ready = closure <= TUNE.RING_CLOSE_MAX
+    && aspect >= TUNE.RING_ASPECT_MIN
+    && radialVariation <= TUNE.RING_RADIAL_CV_MAX
+    && revolutions >= TUNE.RING_WINDING_MIN;
+
+  return { ready, closure, aspect, radialVariation, revolutions };
+}
+
+/**
  * Measurement without policy: the closest rune and how close it is, whatever
  * the floor and margin would say about it. recognize() is this plus the two
  * rules; the live preview is this raw, because "Ringfall, 45%, not yet" is the
@@ -590,8 +651,10 @@ export function bestMatch(rawPoints) {
   let best = null;
   let bestScore = -Infinity;
   let runnerUp = -Infinity;
+  let ringScore = -Infinity;
   for (const rune of runes) {
     const score = scoreAgainst(candidate, rune);
+    if (rune.id === 'ringfall') ringScore = score;
     if (score > bestScore) {
       runnerUp = bestScore;
       bestScore = score;
@@ -602,10 +665,22 @@ export function bestMatch(rawPoints) {
   }
   if (!best) return null;
 
+  // A closed round loop is stronger evidence for Ringfall than a low template
+  // score caused by the player's hand returning a few pixels off its start.
+  // Keep the real score for the readout; `assisted` explains why it locked.
+  const loop = ringLoopAssist(points);
+  if (loop?.ready) {
+    const ring = runes.find(rune => rune.id === 'ringfall');
+    if (ring) {
+      const nextBest = best.id === ring.id ? runnerUp : bestScore;
+      return { rune: ring, score: ringScore, runnerUp: nextBest, ready: true, assisted: true, loop };
+    }
+  }
+
   // The margin is what stops two similar runes trading places at random when a
   // drawing sits between them. Meaningless with one rune defined.
   const clear = runes.length < 2 || bestScore - runnerUp >= TUNE.SCORE_MARGIN;
-  return { rune: best, score: bestScore, runnerUp, ready: bestScore >= TUNE.SCORE_FLOOR && clear };
+  return { rune: best, score: bestScore, runnerUp, ready: bestScore >= TUNE.SCORE_FLOOR && clear, assisted: false };
 }
 
 export function recognize(rawPoints) {
@@ -647,6 +722,7 @@ let lastTip = null;
 let preview = null;
 let previewAt = 0;
 let lastTipAt = 0;
+let lockedByAssist = false;
 
 /** How far along the charge is, 0..1. Clamped — overload is handled separately. */
 function chargeAt(now) {
@@ -660,7 +736,7 @@ function chargeAt(now) {
  * something actually happens.
  *
  * @returns {{
- *   phase: string, rune: object|null, charge: number, overloading: boolean,
+ *   phase: string, rune: object|null, charge: number, overloading: boolean, assisted: boolean,
  *   event: null | { type: 'fired'|'fizzled'|'overloaded', rune?: object, charge?: number }
  * }}
  */
@@ -682,14 +758,14 @@ export function updateCast(gateOpen, tip, now) {
     }
     updateStroke(false, tip, now);
     resetCast();
-    return { phase, preview: null, rune: null, charge: 0, overloading: false, event };
+    return { phase, preview: null, rune: null, charge: 0, overloading: false, assisted: false, event };
   }
 
   // ── Held ──
   if (phase === CAST.SPENT) {
     lastTip = { x: tip.x, y: tip.y };
     lastTipAt = now;
-    return { phase, preview: null, rune: null, charge: 0, overloading: false, event: null };
+    return { phase, preview: null, rune: null, charge: 0, overloading: false, assisted: false, event: null };
   }
 
   if (phase === CAST.IDLE) {
@@ -701,28 +777,43 @@ export function updateCast(gateOpen, tip, now) {
   if (phase === CAST.DRAWING) {
     updateStroke(true, tip, now);
 
-    if (now - previewAt >= TUNE.PREVIEW_MS) {
+    // Check closure every camera frame, not only at the slower human-facing
+    // preview cadence. The fingertip may pass through the start for one frame
+    // before continuing into a tail; that is the exact instant to keep.
+    const loop = ringLoopAssist(currentStroke());
+    if (loop?.ready) {
+      const hit = bestMatch(currentStroke());
+      lockedRune = hit?.rune ?? RUNES.find(rune => rune.id === 'ringfall');
+      lockedByAssist = true;
+      phase = CAST.CHARGING;
+      chargeStart = now;
+    }
+
+    if (phase === CAST.DRAWING && now - previewAt >= TUNE.PREVIEW_MS) {
       previewAt = now;
       preview = bestMatch(currentStroke());
     }
 
     // Speed in normalized units per second, so STILL_SPEED means the same
     // thing whatever the frame rate happens to be.
-    const dt = lastTipAt ? (now - lastTipAt) / 1000 : 0;
-    const speed = lastTip && dt > 0 ? dist(lastTip, tip) / dt : Infinity;
-    if (speed > TUNE.STILL_SPEED) stillSince = 0;
-    else if (!stillSince) stillSince = now;
+    if (phase === CAST.DRAWING) {
+      const dt = lastTipAt ? (now - lastTipAt) / 1000 : 0;
+      const speed = lastTip && dt > 0 ? dist(lastTip, tip) / dt : Infinity;
+      if (speed > TUNE.STILL_SPEED) stillSince = 0;
+      else if (!stillSince) stillSince = now;
 
-    if (stillSince && now - stillSince >= TUNE.STILL_MS) {
-      const hit = recognize(currentStroke());
-      if (hit) {
-        lockedRune = hit.rune;
-        phase = CAST.CHARGING;
-        chargeStart = now;
+      if (stillSince && now - stillSince >= TUNE.STILL_MS) {
+        const hit = recognize(currentStroke());
+        if (hit) {
+          lockedRune = hit.rune;
+          lockedByAssist = Boolean(bestMatch(currentStroke())?.assisted);
+          phase = CAST.CHARGING;
+          chargeStart = now;
+        }
+        // No match yet? Say nothing and keep recording. The player may simply be
+        // pausing mid-rune, and yanking the stroke away from them there would be
+        // the most infuriating possible failure.
       }
-      // No match yet? Say nothing and keep recording. The player may simply be
-      // pausing mid-rune, and yanking the stroke away from them there would be
-      // the most infuriating possible failure.
     }
   } else if (phase === CAST.CHARGING && now - chargeStart > TUNE.CHARGE_OVERLOAD_MS) {
     event = { type: "overloaded", rune: lockedRune };
@@ -745,6 +836,7 @@ export function updateCast(gateOpen, tip, now) {
     // Past full but not yet overloaded: the window where the player should be
     // getting nervous. The room draws this differently on purpose.
     overloading: phase === CAST.CHARGING && held > TUNE.CHARGE_FULL_MS,
+    assisted: phase === CAST.CHARGING && lockedByAssist,
     event,
   };
 }
@@ -756,6 +848,7 @@ function resetCast() {
   stillSince = 0;
   lastTip = null;
   lastTipAt = 0;
+  lockedByAssist = false;
   // Without this the last stroke's verdict flashes up the instant the next one
   // starts, before a single new point has been scored.
   preview = null;

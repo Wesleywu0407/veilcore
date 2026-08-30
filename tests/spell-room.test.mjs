@@ -14,7 +14,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  resample, normalizeStroke, templateDistance, recognize, bestMatch,
+  resample, normalizeStroke, templateDistance, recognize, bestMatch, ringLoopAssist,
   isPinching, boundingBox, pathLength, RUNES, TUNE,
   updateCast, resetMagic,
 } from "../js/spell-room/magic.js";
@@ -209,6 +209,19 @@ test("recognize never returns the wrong spell under jitter", () => {
   }
 });
 
+test("Ringfall assist accepts a closed oval but refuses both triangles and an open arc", () => {
+  const oval = Array.from({ length: 41 }, (_, i) => {
+    const angle = (i / 40) * Math.PI * 2;
+    return { x: 0.5 + Math.cos(angle) * 0.24, y: 0.5 + Math.sin(angle) * 0.16 };
+  });
+  const openArc = oval.slice(0, 31);
+
+  assert.equal(ringLoopAssist(oval)?.ready, true, "a complete hand-drawn oval should receive loop assistance");
+  assert.equal(ringLoopAssist(openArc)?.ready, false, "three quarters of a circle is not closed");
+  assert.equal(ringLoopAssist(trace(RUNES[1].points))?.ready, false, "Aegis must not become Ringfall");
+  assert.equal(ringLoopAssist(trace(RUNES[2].points))?.ready, false, "Gravity Seal must not become Ringfall");
+});
+
 // ─── TODO #1 — isPinching ─────────────────────────────────────────────────────
 
 test("isPinching is scale invariant", () => {
@@ -334,12 +347,20 @@ function caster() {
 
 test("a rune locks once the hand goes still, without letting go", () => {
   const c = caster();
-  const mid = c.draw(RUNES[0].points);
+  const mid = c.draw(RUNES[1].points);
   assert.equal(mid.phase, "drawing", "still moving — must not lock yet");
 
   const locked = c.hold(TUNE.STILL_MS + 60);
   assert.equal(locked.phase, "charging", "hand stopped but the rune never locked");
-  assert.equal(locked.rune.id, RUNES[0].id);
+  assert.equal(locked.rune.id, RUNES[1].id);
+});
+
+test("a closed Ringfall loop locks immediately before a release tail can spoil it", () => {
+  const c = caster();
+  const locked = c.draw(RUNES[0].points);
+  assert.equal(locked.phase, "charging");
+  assert.equal(locked.rune.id, "ringfall");
+  assert.equal(locked.assisted, true);
 });
 
 test("charge grows with how long you hold, and starts above zero", () => {
@@ -366,9 +387,11 @@ test("releasing fires the locked rune at the charge you held", () => {
 
 test("a quick flick still casts, at minimum power", () => {
   // Letting go before the shape settles must not swallow the cast — punishing
-  // speed here would make the whole system feel sluggish.
+  // speed here would make the whole system feel sluggish. Use a triangle:
+  // Ringfall now locks as soon as its loop closes and legitimately begins
+  // charging before release.
   const c = caster();
-  c.draw(RUNES[0].points);
+  c.draw(RUNES[1].points);
   const out = c.release();
   assert.equal(out.event?.type, "fired");
   assert.equal(out.event.charge, TUNE.CHARGE_MIN);
@@ -441,15 +464,18 @@ test("the preview rises as a rune is drawn, and clears between strokes", () => {
   let now = 1000;
   const scores = [];
   const N = 40;
+  let final = null;
   for (let i = 0; i <= N; i++) {
     const a = (i / N) * Math.PI * 2 - Math.PI / 2;
     now += 1000 / 30;
     const state = updateCast(true, { x: 0.5 + Math.cos(a) * 0.22, y: 0.5 + Math.sin(a) * 0.22 }, now);
+    final = state;
     if (state.preview) scores.push(state.preview.score);
   }
   assert.ok(scores.length > 4, "the preview should report throughout the stroke");
   assert.ok(scores.at(-1) > scores[0], "a finished ring must score better than a first arc");
-  assert.ok(scores.at(-1) >= TUNE.SCORE_FLOOR, "a full ring should clear the floor");
+  assert.equal(final.phase, "charging", "closing the ring should lock it without a still hold");
+  assert.equal(final.assisted, true);
 
   // A fresh stroke must not open showing the last one's verdict.
   resetMagic();

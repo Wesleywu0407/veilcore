@@ -7,8 +7,8 @@ hold decides how hard it lands.
 Pure static — no build step, no server, no API. Open it and it runs.
 
 > **Status: playable, still being tuned.** The duel and the practice range both
-> work end to end. The bow is measured and shootable in the practice range only;
-> nothing wires it into the duel yet. See [Where it stands](#where-it-stands).
+> work end to end. Runes use one hand; raising both hands switches the duel to
+> the bow. See [Where it stands](#where-it-stands).
 
 ## Opening it
 
@@ -100,6 +100,14 @@ the keyboard too.
 | **H** | turn hand tracking on or off, without reloading |
 | **R** | next round, once the match has finished |
 
+Raise **one hand** to cast runes. Raise **both hands** to take up the bow: close
+one hand on the string, pull the wrists apart, aim by moving the bow hand, then
+open the string hand to loose. Lowering either hand returns to rune casting and
+clears the unfinished bow state; entering the bow likewise clears a partial
+rune, so the two gesture pipelines cannot fire each other by accident.
+The mirrored self view in the lower-right shows the tracked hand skeleton and
+the mode selected from the number of visible hands.
+
 ## The duel
 
 Five minutes, 100 HP, 100 mana. Mana trickles back at 3.2/s anywhere — and at
@@ -110,6 +118,12 @@ attacking, so both of you have to keep leaving cover to stand in the open.
 The rival is a bot, and it pays for its own attacks out of the same mana pool
 you do. It did not always — while its casts were free it could out-trade you
 from anywhere on the map and had no reason to care about the Well.
+
+The bow is aimed rather than auto-directed. Its reticle starts wherever the bow
+hand was when the string was nocked, then follows that wrist relative to the
+starting point. An arrow can strike the rival or its Core; Aegis absorbs it the
+same way it absorbs Ringfall. Its first balance pass uses Ringfall's mana,
+cooldown, and damage envelope so aim is the only new variable being judged.
 
 Every number above lives in `js/arena/config.js`.
 
@@ -149,19 +163,18 @@ Done:
 - The duel — runes, canvas HUD, objective, bot, win conditions.
 - Two-handed bow measurement (`js/spell-room/archery.js`) — pure functions, no
   camera or DOM, 11 tests.
+- The bow in the duel — two-hand mode switching, relative aim, mirrored IK draw
+  poses, arrow/Core hit testing, mana, cooldown, damage, and close third-person
+  framing.
 - The practice range, and the bow on screen (`js/arena/bow-view.js`): the Meshy
   mesh with its baked string cut out, plus a procedural string and arrow.
 
 Open:
 
-- **Five bow placement numbers want a human eye** — `BOW_LENGTH`, `REST`,
-  `CANT`, `NOCK_TRAVEL`, `ARROW_LENGTH` in `js/arena/bow-view.js`. The
-  orientation and the string anchor are already checked against the real mesh
-  (limbs vertical, arc in front of the string, string tied at the measured
-  tips), so if it looks wrong on screen it is one of those five and not the
-  geometry.
-- **The bow is not in the duel.** It exists only in the practice range, and
-  whether archery replaces rune casting or coexists with it is undecided.
+- **The practice-range placement still wants a human eye** — `BOW_LENGTH`,
+  `PRACTICE_BOW_MOUNT`, `NOCK_TRAVEL`, and `ARROW_LENGTH` in
+  `js/arena/bow-view.js`. The duel has its own body-space mount and its right-
+  and left-handed framing have both been checked on the real rig.
 
 ## Where things live
 
@@ -215,7 +228,7 @@ can trace a rune; the fingers cannot curl. Meshy cannot add them.
 ## Tests
 
 ```bash
-npm run test         # 43 tests, no camera needed
+npm run test         # 51 tests, no camera needed
 npm run runes        # how far apart the rune shapes sit
 ```
 

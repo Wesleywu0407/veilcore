@@ -82,6 +82,7 @@ export function readBow(hands) {
 
   return {
     bow, string,
+    stringSide: string.side ?? (string === b ? 'right' : 'left'),
     spans,                                   // raw, for the tuning readout
     draw,                                    // 0..1, what the game should use
     // Unit vector from the string toward the bow: the way the arrow points.
@@ -151,6 +152,7 @@ export function createBowState() {
       return {
         phase, draw: read.draw, spans: read.spans,
         aim: read.aim, angle: read.angle, peak, event,
+        stringSide: read.stringSide,
         // Handed out so consumers point the reticle with the same hand this
         // file picked. Deciding it twice is how the panel ends up disagreeing
         // with the shot.

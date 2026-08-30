@@ -4,7 +4,8 @@
 // split follows the problem: the limbs never change, and the string does nothing
 // but change, so a baked string can only ever be right at one draw length.
 //
-// Parented to the camera — the practice range has no body to hold it.
+// The practice range parents it to the camera because there is no body. The
+// duel parents the same view to a body-space anchor that follows the bow wrist.
 //
 // ── Orientation, because guessing it got it wrong once ──
 //
@@ -31,14 +32,23 @@ const ARROW_LENGTH = 0.9;
 // Where the bow sits in front of the lens, and how it is canted. An archer does
 // not hold a bow dead vertical, and dead vertical also reads as a prop taped to
 // the screen.
-const REST = { x: -0.30, y: -0.24, z: -0.62 };
-const CANT = { y: 0.14, z: 0.16 };
+export const PRACTICE_BOW_MOUNT = Object.freeze({
+  rest: Object.freeze({ x: -0.30, y: -0.24, z: -0.62 }),
+  cant: Object.freeze({ x: 0, y: 0.14, z: 0.16 }),
+});
 
-export function createBowView(camera) {
+// The duel's parent is already positioned at the solved bow wrist and oriented
+// so local -Z is the shot direction. It therefore needs no camera-space offset.
+export const DUEL_BOW_MOUNT = Object.freeze({
+  rest: Object.freeze({ x: 0, y: 0, z: 0 }),
+  cant: Object.freeze({ x: 0, y: 0, z: 0 }),
+});
+
+export function createBowView(parent, { rest = PRACTICE_BOW_MOUNT.rest, cant = PRACTICE_BOW_MOUNT.cant } = {}) {
   const rig = new THREE.Group();
-  rig.position.set(REST.x, REST.y, REST.z);
-  rig.rotation.set(0, CANT.y, CANT.z);
-  camera.add(rig);
+  rig.position.set(rest.x, rest.y, rest.z);
+  rig.rotation.set(cant.x ?? 0, cant.y ?? 0, cant.z ?? 0);
+  parent.add(rig);
 
   // Three points: upper nock, the fingers, lower nock. Rebuilt every frame,
   // which is trivial for three vertices and is the entire reason it is not baked.

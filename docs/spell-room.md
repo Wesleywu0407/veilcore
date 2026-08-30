@@ -3,7 +3,7 @@
 `js/spell-room/magic.js` decides whether a wave of the hand becomes a spell.
 It is the only file in the project with no dependencies on Three.js, the DOM,
 or the camera — it takes normalised 0..1 points and returns verdicts, which is
-why all 43 tests can run without anyone standing in front of a webcam.
+why all 51 tests can run without anyone standing in front of a webcam.
 
 This note is about *why* it is shaped the way it is. The code says what it
 does; most of the decisions below were paid for with a bug.
@@ -215,6 +215,13 @@ are deliberately slow and long: corners are where a hand naturally slows, so a
 trigger-happy pair locks a half-drawn shape at the first vertex. That failure
 lands precisely on the strokes that were going *well*, and every rune now has
 corners, which makes it worse rather than better.
+
+**Ringfall also locks when its loop closes.** A real hand often returns to the
+start of a circle and then drags a short tail while waiting for the pinch gate
+to release. `ringLoopAssist()` catches the useful instant first. It requires a
+closed, near-round path with one revolution; measured radial variation separates
+the accepted oval range (up to 0.151) from both triangular runes (0.230+), so
+this does not lower `SCORE_FLOOR` or make the other symbols trade places.
 
 **A failed lock says nothing.** If the hand goes still and no rune matches, the
 stroke keeps recording. The player may simply be pausing mid-rune, and yanking
