@@ -92,6 +92,22 @@ const SHRINE_YAW = Math.PI;  // the niche faces -Z in the source mesh, so turn i
 const CRYSTAL_Y = 2.45;      // the niche mouth
 const CRYSTAL_OUT = 1.2;     // clear of the stone, so the orbit rings do not clip it
 
+async function loadArenaShell() {
+  const url = 'assets/models/arena/arena-shell.glb';
+  try {
+    const response = await fetch(url, { method: 'HEAD' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+    const gltf = await new GLTFLoader().loadAsync(url);
+    arena.attachShell(gltf.scene);
+    setStatus('Meshy cathedral loaded');
+  } catch (error) {
+    // There is intentionally no procedural arena fallback. A missing shell is
+    // a visible asset error, not permission to quietly rebuild the old stage.
+    setStatus(`arena asset missing: ${error.message}`);
+  }
+}
+
 async function loadArenaProps() {
   const url = 'assets/models/arena/core-shrine.glb';
   try {
@@ -116,7 +132,6 @@ async function loadArenaProps() {
         object.receiveShadow = true;
       });
       core.group.add(shrine);
-      core.pedestal.visible = false;
 
       // Float the Core clear of the stone rather than inside the niche: which
       // way the niche faces cannot be read off the mesh, and out here the
@@ -1440,6 +1455,7 @@ const runeList = document.querySelector('[data-arena-runes]');
 if (runeList) runeList.textContent = RUNES.map(rune => rune.name).join(' · ');
 setStatus(isReady() ? 'ready' : 'keyboard ready');
 resize();
+void loadArenaShell();
 void loadMeshyDuelists();
 void loadArenaProps();
 void loadBow();
