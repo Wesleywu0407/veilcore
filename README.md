@@ -4,7 +4,9 @@ A five-minute duel you cast by drawing runes in the air. The webcam tracks your
 hand; a pinch opens a stroke; the shape decides which spell, and how long you
 hold decides how hard it lands.
 
-Pure static — no build step, no server, no API. Open it and it runs.
+The front end is still plain static files with no build step or framework. A
+small dependency-free Node server now serves those files and owns two-player
+room codes plus WebSocket relay; solo play still works without a remote player.
 
 > **Status: playable, still being tuned.** The duel and the practice range both
 > work end to end. Runes use one hand; raising both hands switches the duel to
@@ -12,7 +14,7 @@ Pure static — no build step, no server, no API. Open it and it runs.
 
 ## Opening it
 
-There is no build step. Serve the folder and open a page.
+There is no build step or install step. Start the duel server and open a page.
 
 ```bash
 cd veilcore
@@ -24,9 +26,13 @@ npm run dev
 | **http://localhost:5173/** | the duel — press **BEGIN DUEL** |
 | **http://localhost:5173/practice.html** | the practice range — press **OPEN THE RANGE** |
 
-`npm run dev` is just `python3 -m http.server 5173`; any static server does. If
-you use the **Live Server** extension in VS Code or Cursor, right-click
-`index.html` → *Open with Live Server*, and the ports become **5500**:
+`npm run dev` starts the dependency-free static/WebSocket server on every local
+interface. It prints both the loopback and LAN addresses. A generic static
+server can still run solo mode, but room buttons require this server.
+
+If you use the **Live Server** extension in VS Code or Cursor, right-click
+`index.html` → *Open with Live Server*, and the ports become **5500** (solo
+only):
 
 ```
 http://127.0.0.1:5500/index.html
@@ -40,8 +46,37 @@ says so.
 
 First run needs the network: the hand tracker pulls MediaPipe from a CDN (~8 MB)
 the first time you cast. Everything after that is local. Nothing you do is sent
-anywhere — the video never leaves the browser, and there is no backend to send
-it to.
+anywhere — the video never leaves the browser. In a room, only position, health,
+mana and combat events cross the WebSocket.
+
+### Playing a friend
+
+The easiest camera-safe route is a temporary HTTPS tunnel:
+
+```bash
+# terminal one
+npm run dev
+
+# terminal two
+npm run share
+```
+
+`npm run share` prints a temporary `https://…lhr.life` address. Both players
+open that same address. One presses **CREATE ROOM** and sends the four-character
+code; the other enters it and presses **JOIN ROOM**. The duel begins when the
+second player arrives. The tunnel URL is public but unlisted and disappears as
+soon as the SSH command stops.
+
+For a LAN-only HTTPS session, create a local certificate instead:
+
+```bash
+npm run cert
+npm run dev:https
+```
+
+Both devices must install and trust `.cert/veilcore-ca.crt`, then open the HTTPS
+LAN address printed by the server. Trust is necessary: a plain `http://192.168…`
+page can load the game, but browsers will refuse its webcam.
 
 ### If the camera never starts
 
@@ -115,9 +150,10 @@ Five minutes, 100 HP, 100 mana. Mana trickles back at 3.2/s anywhere — and at
 capture. That gap is the whole game: the Well is the only way to afford to keep
 attacking, so both of you have to keep leaving cover to stand in the open.
 
-The rival is a bot, and it pays for its own attacks out of the same mana pool
-you do. It did not always — while its casts were free it could out-trade you
-from anywhere on the map and had no reason to care about the Well.
+In **SOLO DUEL** the rival is a bot, and it pays for its own attacks out of the
+same mana pool you do. In a room the bot is disabled: position, charging,
+Ringfall, Aegis, Gravity Seal, arrows, damage, Core disruption and round resets
+come from the other player instead.
 
 The bow is aimed rather than auto-directed. Its reticle starts wherever the bow
 hand was when the string was nocked, then follows that wrist relative to the
@@ -161,6 +197,8 @@ wall.
 Done:
 
 - The duel — runes, canvas HUD, objective, bot, win conditions.
+- Two-player rooms — dependency-free WebSocket relay, mirrored arena position,
+  combat events, health/mana snapshots, disconnect pause and shared reset.
 - Two-handed bow measurement (`js/spell-room/archery.js`) — pure functions, no
   camera or DOM, 11 tests.
 - The bow in the duel — two-hand mode switching, relative aim, mirrored IK draw

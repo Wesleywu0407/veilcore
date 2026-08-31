@@ -19,6 +19,7 @@ import { createBowAim } from './spell-room/aim.js';
 import { createInputMode } from './spell-room/input-mode.js';
 import { createBowView, DUEL_BOW_MOUNT } from './arena/bow-view.js';
 import { raySphereDistance, rayVerticalCapsuleDistance } from './arena/shot.js';
+import { createRoomClient, mirrorArenaPosition, normaliseRoomCode } from './arena/room-client.js';
 
 const GOLD = '#ffd98a';
 const VIOLET = '#9b87ff';
@@ -32,6 +33,10 @@ const video = document.querySelector('[data-arena-video]');
 const coverVideo = document.querySelector('[data-arena-cover]');
 const startPanel = document.querySelector('[data-arena-start]');
 const startButton = document.querySelector('[data-arena-enter]');
+const hostButton = document.querySelector('[data-arena-host]');
+const joinForm = document.querySelector('[data-arena-join]');
+const roomCodeInput = document.querySelector('[data-arena-room-code]');
+const roomStatusLine = document.querySelector('[data-arena-room-status]');
 const errorLine = document.querySelector('[data-arena-error]');
 const statusLine = document.querySelector('[data-arena-status]');
 const ctx = overlayCanvas.getContext('2d');
@@ -72,6 +77,12 @@ const cooldowns = { ringfall: 0, aegis: 0, 'gravity-seal': 0, bow: 0 };
 let selectedRuneId = 'ringfall';
 let targetMode = 'rival';
 let botCastCount = 0;
+let onlineDuel = false;
+let peerConnected = false;
+let roomRole = null;
+let remoteCharging = false;
+let networkSentAt = 0;
+const remoteTargetPosition = opponentPosition.clone();
 
 // Meshy's rigger emits one clip per file, so the duelist's actions sit beside
 // the character rather than inside it. The character GLB carries only the
@@ -211,6 +222,23 @@ let bowStringSide = 'right';
 
 const FLASH_COLOUR = { cast: GOLD, fizzle: '#ff8b6b', overload: '#ff3d2e', blocked: '#6f7f9a', hit: '#b36cff' };
 
+const roomClient = createRoomClient({
+  onStatus: setRoomStatus,
+  onPeer(connected, details) {
+    peerConnected = connected;
+    roomRole = details.role;
+    if (connected) {
+      setRoomStatus(`ROOM ${details.room} · FRIEND CONNECTED`);
+      if (!running) void beginDuel();
+    } else if (running && onlineDuel) {
+      setStatus('friend disconnected · duel paused');
+    }
+  },
+  onState: applyRemoteState,
+  onEvent: applyRemoteEvent,
+  onReset: () => resetRound({ broadcast: false }),
+});
+
 // ─── Combat ──────────────────────────────────────────────────────────────────
 
 const _segment = new THREE.Vector3();
@@ -218,10 +246,15 @@ const _relative = new THREE.Vector3();
 const _closest = new THREE.Vector3();
 const _targetCentre = new THREE.Vector3();
 
-function disruptAndSpill(side) {
+function sendRoomEvent(event) {
+  if (onlineDuel) roomClient.sendEvent(event);
+}
+
+function disruptAndSpill(side, { broadcast = true } = {}) {
   const amount = disruptCore(match, side);
   if (amount <= 0) return false;
   arena.spillCore(side, amount);
+  if (broadcast && side === 'opponent') sendRoomEvent({ kind: 'core' });
   setStatus(`${side === 'player' ? 'your' : 'rival'} Core disrupted · mana spilled`);
   return true;
 }
@@ -241,9 +274,11 @@ function hitPlayerRingfall(from, to, radius, amount) {
   if (laneHits(from, to, opponentPosition, radius)) {
     if (spells.absorb('opponent', performance.now())) {
       setStatus('rival Aegis absorbed Ringfall');
+      sendRoomEvent({ kind: 'shield-broken' });
     } else {
       damage(match, 'opponent', amount);
       opponentAvatar.flash();
+      sendRoomEvent({ kind: 'damage', amount, source: 'ringfall' });
     }
     hit = true;
   }
@@ -320,6 +355,7 @@ function castRingfall(charge, now, { free = false } = {}) {
   hitPlayerRingfall(_castOrigin, _ringfallEnd, radius, amount);
   const visualOrigin = playerAvatar.handWorld(_ringfallVisualOrigin) ?? _castOrigin;
   playerHalo.release(visualOrigin, _castDirection, power);
+  sendRoomEvent({ kind: 'cast', spell: 'ringfall', power, target: targetMode });
   cooldowns.ringfall = DUEL.ringfallCooldown;
   lastCast = { name: 'Ringfall', charge: power };
   lastCastAt = now;
@@ -340,6 +376,7 @@ function castAegis(charge, now) {
   }
   const power = clamp(charge, 0.25, 1);
   spells.castAegis('player', playerPosition, power, now);
+  sendRoomEvent({ kind: 'cast', spell: 'aegis', power });
   cooldowns.aegis = DUEL.aegisCooldown;
   lastCast = { name: 'Aegis', charge: power };
   lastCastAt = now;
@@ -360,6 +397,7 @@ function castGravitySeal(charge, now) {
   }
   const power = clamp(charge, 0.25, 1);
   spells.castGravity('player', opponentPosition, power, now);
+  sendRoomEvent({ kind: 'cast', spell: 'gravity-seal', power });
   cooldowns['gravity-seal'] = DUEL.gravityCooldown;
   lastCast = { name: 'Gravity Seal', charge: power };
   lastCastAt = now;
@@ -430,6 +468,90 @@ function updateArrows(dt) {
   }
 }
 
+function applyRemoteState(state) {
+  if (!onlineDuel || !state) return;
+  const [x, z] = mirrorArenaPosition(state.position);
+  if (Number.isFinite(x) && Number.isFinite(z)) remoteTargetPosition.set(x, 0, z);
+  if (Number.isFinite(state.hp)) match.opponent.hp = clamp(state.hp, 0, DUEL.maxHp);
+  if (Number.isFinite(state.mana)) match.opponent.mana = clamp(state.mana, 0, DUEL.maxMana);
+  if (Number.isFinite(state.coreDisabledFor)) {
+    match.cores.opponent.disabledFor = Math.max(0, state.coreDisabledFor);
+  }
+  if (roomRole === 'guest' && Number.isFinite(state.timeLeft)) {
+    match.timeLeft = Math.max(0, state.timeLeft);
+  }
+  remoteCharging = Boolean(state.charging);
+}
+
+function applyRemoteEvent(event) {
+  if (!onlineDuel || !event) return;
+  const now = performance.now();
+  if (event.kind === 'damage') {
+    damage(match, 'player', Number(event.amount) || 0);
+    playerAvatar.flash();
+    flashUntil = now + 320;
+    flashKind = 'hit';
+    setStatus(`${event.source === 'bow' ? 'arrow' : 'spell'} hit you`);
+    return;
+  }
+  if (event.kind === 'core') {
+    disruptAndSpill('player', { broadcast: false });
+    return;
+  }
+  if (event.kind === 'shield-broken') {
+    spells.absorb('player', now);
+    setStatus('your Aegis absorbed the attack');
+    return;
+  }
+  if (event.kind !== 'cast') return;
+
+  const power = clamp(Number(event.power) || 0.3, 0.25, 1);
+  opponentAvatar.cast();
+  if (event.spell === 'aegis') {
+    spells.castAegis('opponent', opponentPosition, power, now);
+    return;
+  }
+  if (event.spell === 'gravity-seal') {
+    spells.castGravity('opponent', playerPosition, power, now);
+    return;
+  }
+
+  const origin = _castOrigin.copy(opponentPosition).setY(1.65);
+  const destination = _castTarget
+    .copy(event.target === 'core' ? arena.cores.player.position : playerPosition)
+    .setY(1.55);
+  const direction = _castDirection.subVectors(destination, origin).normalize();
+  if (event.spell === 'bow') {
+    spawnArrow(origin, direction);
+  } else {
+    opponentHalo.release(origin, direction, power);
+  }
+}
+
+function updateRemoteOpponent(dt) {
+  const distance = opponentPosition.distanceTo(remoteTargetPosition);
+  opponentPosition.lerp(remoteTargetPosition, Math.min(1, dt * 14));
+  resolveArenaCollision(opponentPosition);
+  opponentAvatar.setPosition(opponentPosition);
+  _opponentFacing.subVectors(playerPosition, opponentPosition).setY(0).normalize();
+  opponentAvatar.face(_opponentFacing);
+  opponentAvatar.update(dt, Math.min(DUEL.playerSpeed, distance / Math.max(dt, 0.001)), remoteCharging ? 0.35 : 0);
+  return { telegraph: remoteCharging ? 0.35 : 0 };
+}
+
+function sendNetworkState(now) {
+  if (!onlineDuel || !peerConnected || now - networkSentAt < 50) return;
+  networkSentAt = now;
+  roomClient.sendState({
+    position: [playerPosition.x, playerPosition.z],
+    hp: match.player.hp,
+    mana: match.player.mana,
+    coreDisabledFor: match.cores.player.disabledFor,
+    timeLeft: roomRole === 'host' ? match.timeLeft : undefined,
+    charging: playerCharging,
+  });
+}
+
 function fireBow(power, now, reticle) {
   if (match.phase !== 'playing' || cooldowns.bow > 0) {
     flashUntil = now + 180;
@@ -465,6 +587,7 @@ function fireBow(power, now, reticle) {
   _bowFar.copy(_bowRayOrigin).addScaledVector(_bowRayDirection, 48);
   _bowVisualDirection.subVectors(_bowFar, _bowVisualOrigin).normalize();
   spawnArrow(_bowVisualOrigin, _bowVisualDirection);
+  sendRoomEvent({ kind: 'cast', spell: 'bow', power: draw });
 
   if (hitCore) {
     disruptAndSpill('opponent');
@@ -472,9 +595,12 @@ function fireBow(power, now, reticle) {
   } else if (hitBody) {
     if (spells.absorb('opponent', now)) {
       setStatus('rival Aegis caught the arrow');
+      sendRoomEvent({ kind: 'shield-broken' });
     } else {
-      damage(match, 'opponent', lerp(DUEL.bowDamageMin, DUEL.bowDamageMax, draw));
+      const amount = lerp(DUEL.bowDamageMin, DUEL.bowDamageMax, draw);
+      damage(match, 'opponent', amount);
       opponentAvatar.flash();
+      sendRoomEvent({ kind: 'damage', amount, source: 'bow' });
       setStatus('arrow hit');
     }
   } else {
@@ -778,10 +904,12 @@ async function toggleTracking() {
   }
 }
 
-startButton?.addEventListener('click', async () => {
+async function beginDuel() {
+  if (running) return;
   coverVideo?.pause();
   startPanel.hidden = true;
   running = true;
+  last = performance.now();
   resize();
   requestAnimationFrame(loop);
   if (NO_CAMERA) {
@@ -800,6 +928,43 @@ startButton?.addEventListener('click', async () => {
     }
     setStatus('keyboard casting ready · H retries camera');
   }
+}
+
+startButton?.addEventListener('click', () => {
+  roomClient.close();
+  onlineDuel = false;
+  peerConnected = false;
+  roomRole = null;
+  void beginDuel();
+});
+
+hostButton?.addEventListener('click', async () => {
+  try {
+    onlineDuel = true;
+    const joined = await roomClient.connect({ mode: 'create' });
+    setRoomStatus(`ROOM ${joined.room} · SHARE THIS CODE · WAITING FOR FRIEND`);
+  } catch (error) {
+    onlineDuel = false;
+    setRoomStatus(error.message);
+  }
+});
+
+joinForm?.addEventListener('submit', async event => {
+  event.preventDefault();
+  const code = normaliseRoomCode(roomCodeInput?.value);
+  if (roomCodeInput) roomCodeInput.value = code;
+  try {
+    onlineDuel = true;
+    setRoomStatus(`JOINING ROOM ${code}…`);
+    await roomClient.connect({ mode: 'join', room: code });
+  } catch (error) {
+    onlineDuel = false;
+    setRoomStatus(error.message);
+  }
+});
+
+roomCodeInput?.addEventListener('input', () => {
+  roomCodeInput.value = normaliseRoomCode(roomCodeInput.value);
 });
 
 function updateHand(now) {
@@ -967,29 +1132,38 @@ function step(now) {
   playerAvatar.update(dt, playerSpeed);
 
   const spellState = spells.update(dt, now, { player: playerPosition, opponent: opponentPosition });
-  const botState = bot.update(dt, playerPosition, {
-    wellOwner: match.well.owner,
-    hp: match.opponent.hp,
-    mana: match.opponent.mana,
-    playerCharging,
-  }, spellState.opponentSpeed);
-  resolveArenaCollision(opponentPosition);
-  opponentAvatar.setPosition(opponentPosition);
-  opponentAvatar.face(botState.facing);
-  opponentAvatar.update(dt, botState.speed, botState.telegraph);
-  if (botState.shield && spendMana(match, 'opponent', DUEL.aegisCost)) {
-    spells.castAegis('opponent', opponentPosition, 0.65, now);
-  }
-  if (botState.cast) {
-    botCastCount += 1;
-    botCast(botCastCount % 4 === 0 ? arena.cores.player.position : botState.cast.target);
+  let botState;
+  if (onlineDuel) {
+    botState = updateRemoteOpponent(dt);
+  } else {
+    botState = bot.update(dt, playerPosition, {
+      wellOwner: match.well.owner,
+      hp: match.opponent.hp,
+      mana: match.opponent.mana,
+      playerCharging,
+    }, spellState.opponentSpeed);
+    resolveArenaCollision(opponentPosition);
+    opponentAvatar.setPosition(opponentPosition);
+    opponentAvatar.face(botState.facing);
+    opponentAvatar.update(dt, botState.speed, botState.telegraph);
+    if (botState.shield && spendMana(match, 'opponent', DUEL.aegisCost)) {
+      spells.castAegis('opponent', opponentPosition, 0.65, now);
+    }
+    if (botState.cast) {
+      botCastCount += 1;
+      botCast(botCastCount % 4 === 0 ? arena.cores.player.position : botState.cast.target);
+    }
   }
 
   const playerInWell = Math.hypot(playerPosition.x, playerPosition.z) <= DUEL.wellRadius;
   const opponentInWell = Math.hypot(opponentPosition.x, opponentPosition.z) <= DUEL.wellRadius;
-  updateMatch(match, dt, { player: playerInWell, opponent: opponentInWell });
+  if (!onlineDuel || peerConnected) {
+    updateMatch(match, dt, { player: playerInWell, opponent: opponentInWell });
+  }
   match.player.mana = clamp(match.player.mana + arena.collectMana(playerPosition), 0, DUEL.maxMana);
-  match.opponent.mana = clamp(match.opponent.mana + arena.collectMana(opponentPosition), 0, DUEL.maxMana);
+  if (!onlineDuel) {
+    match.opponent.mana = clamp(match.opponent.mana + arena.collectMana(opponentPosition), 0, DUEL.maxMana);
+  }
   arena.update(worldTime, match);
 
   for (const id of Object.keys(cooldowns)) cooldowns[id] = Math.max(0, cooldowns[id] - dt);
@@ -997,6 +1171,7 @@ function step(now) {
   opponentHalo.update(dt);
   updateArrows(dt);
   updateCamera(dt);
+  sendNetworkState(now);
 
   renderer.render(scene, camera);
   performanceGovernor.update(dt);
@@ -1013,15 +1188,17 @@ function step(now) {
   drawSelfie(getFrame());
 }
 
-function resetRound() {
+function resetRound({ broadcast = true } = {}) {
   match = createMatch();
   playerPosition.set(0, 0, 14);
   opponentPosition.set(0, 0, -12);
+  remoteTargetPosition.copy(opponentPosition);
   bot = createOpponentController(opponentPosition);
   botCastCount = 0;
   arena.clearSpills();
   for (const id of Object.keys(cooldowns)) cooldowns[id] = 0;
   resetMagic();
+  if (broadcast && onlineDuel) roomClient.sendReset();
   setStatus('new duel');
 }
 
@@ -1309,7 +1486,7 @@ function drawHud(now, botState) {
 
   ctx.textAlign = 'right';
   ctx.fillStyle = VIOLET;
-  ctx.fillText('VEIL RIVAL', width - 24, 30);
+  ctx.fillText(onlineDuel ? 'VEIL FRIEND' : 'VEIL RIVAL', width - 24, 30);
   drawBar(width - 24, 40, Math.min(280, width * 0.27), match.opponent.hp / DUEL.maxHp, VIOLET, 'right');
   drawBar(width - 24, 54, Math.min(210, width * 0.2), match.opponent.mana / DUEL.maxMana, '#7f72d8', 'right');
 
@@ -1406,6 +1583,10 @@ function setStatus(text) {
   if (statusLine) statusLine.textContent = text;
 }
 
+function setRoomStatus(text) {
+  if (roomStatusLine) roomStatusLine.textContent = text;
+}
+
 function resize() {
   const dpr = Math.min(devicePixelRatio, 1.5);
   const cap = performanceGovernor.tier === 2 ? 1.25 : performanceGovernor.tier === 1 ? 1 : 0.85;
@@ -1426,6 +1607,7 @@ addEventListener('beforeunload', () => {
   coverVideo?.pause();
   setSelfieVisible(false);
   disposeTracker();
+  roomClient.close();
   for (const arrow of arrows) arrow.mesh.removeFromParent();
   arrowGeometry.dispose();
   arrowMaterial.dispose();

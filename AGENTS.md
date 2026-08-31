@@ -40,17 +40,22 @@ rewrite published history.
 
 ## 3. What this project is
 
-Veilcore — a five-minute webcam duel cast by drawing runes in the air. **Pure
-static.** No build step, no bundler, no server, no API, no `public/` directory.
-The files you edit are the files the browser loads. Do not introduce a build
-step, a framework, or a package dependency without asking.
+Veilcore — a five-minute webcam duel cast by drawing runes in the air. The front
+end is **plain static files**: no build step, bundler, framework, package
+dependency, or `public/` directory. The files you edit are the files the browser
+loads. `scripts/duel-server.mjs` is the dependency-free Node static/WebSocket
+server used for two-player rooms; do not replace it with a framework or add a
+package dependency without asking.
 
 It was split out of `~/Desktop/2ndgames新版` on 2026-08-30. **That copy is a
 dead branch — never edit the arena files there.** This repo is the live one.
 
 ```bash
-npm run dev    # python3 -m http.server 5173
-npm run test   # 43 tests, node --test, no camera needed
+npm run dev    # HTTP static + WebSocket room server on port 5173
+npm run cert   # generate the ignored local CA and HTTPS certificate
+npm run dev:https
+npm run share  # temporary trusted HTTPS tunnel for a friend
+npm run test   # node --test, no camera needed
 npm run runes  # how far apart the rune shapes sit
 ```
 

@@ -83,7 +83,7 @@
     .arena-brand-mark span { transform: rotate(-45deg); font-family: "Cormorant Garamond", serif; font-size: 17px; }
     .arena-season { color: #74819a; }
     .arena-content {
-      align-self: center; width: min(500px, 43vw); margin-left: clamp(0px, 2.8vw, 42px);
+      align-self: center; width: min(690px, 58vw); margin-left: clamp(0px, 2.8vw, 42px);
       padding: clamp(28px, 4vw, 60px) 0;
     }
     .arena-mode {
@@ -99,7 +99,7 @@
     }
     .arena-start h1 span, .arena-start h1 em { display: block; }
     .arena-start h1 em { color: var(--gold); font-style: normal; margin-left: .36em; }
-    .arena-actions { display: flex; align-items: center; gap: 22px; margin-top: 34px; }
+    .arena-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-top: 34px; }
     .arena-start button {
       position: relative; overflow: hidden; width: 218px; padding: 15px 18px;
       border: 1px solid rgba(255,217,138,.72); border-radius: 2px;
@@ -114,8 +114,19 @@
     .arena-start button::after { content: "→"; float: right; font-size: 16px; line-height: 8px; }
     .arena-start button:hover { color: #15100a; border-color: var(--gold); transform: translateY(-2px); }
     .arena-start button:hover::before { transform: translateX(0); }
+    .arena-start button.arena-secondary { border-color: rgba(155,135,255,.68); }
+    .arena-start button.arena-secondary::before { background: var(--violet); }
+    .arena-room-join { display: flex; gap: 8px; }
+    .arena-room-join input {
+      width: 108px; padding: 13px 12px; border: 1px solid rgba(155,135,255,.5);
+      border-radius: 2px; outline: none; background: rgba(8,9,17,.82); color: var(--paper);
+      font: 600 13px/1 "IBM Plex Mono", monospace; letter-spacing: .18em; text-transform: uppercase;
+    }
+    .arena-room-join input:focus { border-color: var(--violet); box-shadow: 0 0 18px rgba(155,135,255,.16); }
+    .arena-room-join button { width: 160px; }
     .arena-action-note { color: #8290a7; font-size: 8px; line-height: 1.75; letter-spacing: .15em; text-transform: uppercase; }
     .arena-action-note b { display: block; color: #d1d6df; font-weight: 500; }
+    .arena-room-status { flex-basis: 100%; color: #a99aff; min-height: 14px; }
     .arena-runes { color: var(--gold); }
     .arena-foot { align-self: end; color: #718099; }
     .arena-controls { display: flex; flex-wrap: wrap; gap: 20px; }
@@ -150,8 +161,11 @@
       .arena-mode { margin-bottom: 14px; }
       .arena-start h1 { font-size: clamp(3.75rem, 13.5vw, 5.6rem); line-height: .8; }
       .arena-start h1 em { margin-left: .24em; }
-      .arena-actions { align-items: center; flex-direction: row; gap: 16px; margin-top: 28px; }
+      .arena-actions { align-items: center; flex-direction: row; gap: 10px; margin-top: 28px; }
       .arena-start button { width: min(218px, 56vw); flex: 0 0 auto; }
+      .arena-room-join { width: 100%; }
+      .arena-room-join input { width: 104px; }
+      .arena-room-join button { width: 150px; }
       .arena-action-note { display: block; }
       .arena-foot { font-size: 8px; }
       .arena-controls span:not(:first-child) { display: none; }
@@ -161,6 +175,8 @@
     @media (max-width: 480px) {
       .arena-actions { align-items: flex-start; flex-direction: column; }
       .arena-start button { width: 218px; }
+      .arena-room-join { width: 100%; }
+      .arena-room-join button { width: 150px; }
       .arena-foot { display: none; }
     }
     @media (max-height: 680px) {
@@ -199,8 +215,13 @@
       <p class="arena-mode">Veilcore duel</p>
       <h1><span>Enter the</span><em>Veil</em></h1>
       <div class="arena-actions">
-        <button type="button" data-arena-enter>BEGIN DUEL</button>
-        <span class="arena-action-note"><b>Solo · 05:00</b>Webcam spellcasting</span>
+        <button type="button" data-arena-enter>SOLO DUEL</button>
+        <button class="arena-secondary" type="button" data-arena-host>CREATE ROOM</button>
+        <form class="arena-room-join" data-arena-join>
+          <input data-arena-room-code aria-label="Room code" maxlength="4" autocomplete="off" placeholder="CODE">
+          <button class="arena-secondary" type="submit">JOIN ROOM</button>
+        </form>
+        <span class="arena-action-note arena-room-status" data-arena-room-status><b>Solo or two-player · 05:00</b>Webcam spellcasting</span>
       </div>
     </main>
 
