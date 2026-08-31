@@ -9,7 +9,7 @@ export function createOpponentController(position) {
   let phase = 'seek';
   let clock = 0;
   let strafe = 1;
-  let shieldCooldown = 2.5;
+  let shieldCooldown = DUEL.botShieldInitialDelay;
   const lockedTarget = new THREE.Vector3();
 
   return {
@@ -47,15 +47,13 @@ export function createOpponentController(position) {
         }
         if (phase !== 'windup') position.addScaledVector(_desired, DUEL.botSpeed * movementScale * dt);
 
-        if (phase === 'seek' && shieldCooldown <= 0 && mana >= DUEL.aegisCost && (hp <= 55 || context.playerCharging)) {
+        if (phase === 'seek' && shieldCooldown <= 0 && mana >= DUEL.aegisCost && (hp <= DUEL.botShieldHp || context.playerCharging)) {
           shield = true;
-          // 8.5s covered almost every hand-cast, so the rival ate nearly every
-          // Ringfall and the player never saw damage land. Longer than one full
-          // draw-charge-release cycle, so roughly every other cast gets through
-          // even before the player learns to outlast the shield.
-          shieldCooldown = 13;
+          // This is intentionally a generous testing rival: the long delay
+          // leaves several full draw-charge-release cycles between shields.
+          shieldCooldown = DUEL.botShieldCooldown;
           phase = 'recover';
-          clock = 0.8;
+          clock = DUEL.botShieldRecovery;
         } else if (phase === 'seek' && clock <= 0 && playerDistance < 34 && mana >= DUEL.botCastCost) {
           phase = 'windup';
           clock = DUEL.botWindup;

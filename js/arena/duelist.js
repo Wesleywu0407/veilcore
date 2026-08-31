@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createArmIK } from './arm-ik.js';
+import { constrainRuneReach } from './reach-limit.js';
 
 const MASK = 0xf1eadb;
 
@@ -23,6 +24,11 @@ const TURN_RATE = 11;
 
 // How fast the arm takes over and lets go.
 const REACH_FADE = 14;
+// How hard the hand chases the point it was given, as an exponential rate.
+// High enough that the arm still feels attached to the stroke, low enough that
+// landmark jitter and the camera easing into the casting shot do not both
+// arrive at the shoulder unfiltered.
+const REACH_TRACK = 18;
 
 // ── The draw ─────────────────────────────────────────────────────────────────
 //
@@ -62,6 +68,35 @@ const DRAW_POSE = {
 
 // Signed shortest angle from `from` to `to`, so a turn never takes the long way.
 const shortAngle = (from, to) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
+
+// Bones an arm owns once IK is driving it. The clavicle is included: leaving it
+// animated swings the whole arm from its root, which the solver then has to
+// chase, and chasing it is what the shake was.
+const ARM_BONES = {
+  right: /^Right(Shoulder|Arm|ForeArm|Hand)$/,
+  both: /^(Left|Right)(Shoulder|Arm|ForeArm|Hand)$/,
+};
+
+/**
+ * The same clip with one side's arm tracks dropped, or both.
+ *
+ * Only ever strip an arm that something is about to drive. Stripping both for
+ * a rune -- which only ever moves the right arm -- left the left arm with no
+ * animation and no solver, so it fell back to the bind pose and the duelist
+ * drew with one hand raised over its head.
+ *
+ * Cached on the clip so a duelist that respawns does not rebuild them.
+ */
+function withoutArms(clip, which) {
+  clip.userData = clip.userData ?? {};
+  clip.userData.masked = clip.userData.masked ?? {};
+  if (clip.userData.masked[which]) return clip.userData.masked[which];
+  const pattern = ARM_BONES[which];
+  const tracks = clip.tracks.filter(track => !pattern.test(track.name.split('.')[0]));
+  const masked = new THREE.AnimationClip(`${clip.name}__${which}`, clip.duration, tracks);
+  clip.userData.masked[which] = masked;
+  return masked;
+}
 
 /**
  * Lightweight art gate. The Meshy GLB will replace only this factory's
@@ -175,7 +210,9 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
   let leftIK = null;       // the left arm, only ever used by the draw
   let castSpark = null;
   let chargeGlow = 0;
+  let castSparkEnabled = true;
   const _sparkPos = new THREE.Vector3();
+  const _reachLocal = new THREE.Vector3();
   const _bowHand = new THREE.Vector3();
   const _stringHand = new THREE.Vector3();
   const _nock = new THREE.Vector3();
@@ -246,17 +283,54 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
      * to the line the player was drawing. The caller unprojects; this just
      * reaches.
      */
-    reach(point, charge = 0) {
+    reach(point, charge = 0, showCastSpark = true) {
       chargeGlow = clamp(charge, 0, 1);
-      if (point) {
+      castSparkEnabled = showCastSpark;
+      // A single non-finite frame used to be harmless, because the target was
+      // overwritten wholesale every frame. It is not harmless now that update()
+      // EASES toward it: one NaN would be lerped into `lastReach` and stay
+      // there for good, the solve would write NaN rotations into the skeleton,
+      // and a skinned mesh with NaN in its bone matrices takes the whole frame
+      // down with it. Tracking does hand out the occasional bad point, so this
+      // is a real path and not a theoretical one.
+      if (point && Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z)) {
+        // A screen point is not automatically a place a shoulder can reach.
+        // Keep the right hand in front of the chest and stop it at the far side
+        // of the sternum; otherwise the analytic IK quite correctly solves an
+        // impossible request by wrapping the elbow through the body.
+        let limitedPoint = point;
+        if (shoulderLocal && armReach > 0) {
+          root.updateMatrixWorld(true);
+          _reachLocal.copy(point);
+          root.worldToLocal(_reachLocal);
+          constrainRuneReach(_reachLocal, shoulderLocal, armReach, _reachLocal);
+          root.localToWorld(_reachLocal);
+          limitedPoint = _reachLocal;
+        }
         reachTarget = reachTarget ?? new THREE.Vector3();
-        reachTarget.copy(point);
-        lastReach.copy(point);
-      } else {
+        reachTarget.copy(limitedPoint);
+        // The first frame snaps, so the arm does not fly in from wherever it
+        // was left last time.
+        if (reachWeight <= 0.01) lastReach.copy(limitedPoint);
+      } else if (!point) {
         reachTarget = null;
       }
+      // A bad point while already reaching keeps the previous target: holding
+      // still for a frame reads as tracking, dropping the arm reads as a bug.
     },
     get reaching() { return reachWeight > 0.01; },
+    /**
+     * World position of the casting hand, or null before the rig has loaded.
+     * Handed out because the spell effects have to form AT the hand, and a
+     * second guess made from the body's position drifts away from the arm the
+     * moment IK moves it.
+     */
+    handWorld(out) {
+      if (!armIK) return null;
+      root.updateMatrixWorld(true);
+      armIK.bones.wrist.getWorldPosition(out);
+      return out;
+    },
     /**
      * Hold a bow at `draw` (0 slack, 1 full), with the string on `stringSide`.
      * Pass null to put it away and give the arms back to the animation.
@@ -314,12 +388,22 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
       hips.visible = false;
       root.add(imported);
 
-      armIK = createArmIK(imported, { shoulder: 'RightArm', elbow: 'RightForeArm', wrist: 'RightHand' });
+      // The pole is where the elbow is told to live, in the character's own
+      // space: down, and behind. Without it the bend plane comes from whatever
+      // the animation happened to be doing, so a running duelist draws with an
+      // elbow that orbits its own wrist.
+      armIK = createArmIK(imported, {
+        shoulder: 'RightArm', elbow: 'RightForeArm', wrist: 'RightHand',
+        pole: new THREE.Vector3(-0.35, -1, -0.45).normalize(),
+      });
       // The bow needs both arms: one holds it out, the other pulls the string.
       // The rune hand only ever needed the right, which is why armIK stayed
       // singular for so long -- it is kept as the right chain so nothing that
       // reaches has to change.
-      leftIK = createArmIK(imported, { shoulder: 'LeftArm', elbow: 'LeftForeArm', wrist: 'LeftHand' });
+      leftIK = createArmIK(imported, {
+        shoulder: 'LeftArm', elbow: 'LeftForeArm', wrist: 'LeftHand',
+        pole: new THREE.Vector3(0.35, -1, -0.45).normalize(),
+      });
       if (armIK) {
         root.updateMatrixWorld(true);
         const shoulder = new THREE.Vector3();
@@ -353,6 +437,18 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
         const idle = find(/idle/i) ?? clips[0];
         const run = find(/run|walk/i) ?? idle;
         actions = { idle: mixer.clipAction(idle), run: mixer.clipAction(run) };
+        // Armless copies of the locomotion clips, for use while the hands are
+        // busy. IK wins the final pose either way, but it can only correct what
+        // the clip left -- and a clip that rewrites the arm every frame gives
+        // it a different starting pose sixty times a second. Legs and spine
+        // still animate, so the duelist runs; the arms simply stop being
+        // argued over.
+        // One pair per thing that can take the arms: a rune uses the right arm
+        // only, a bow uses both.
+        actions.idleRight = mixer.clipAction(withoutArms(idle, 'right'));
+        actions.runRight = mixer.clipAction(withoutArms(run, 'right'));
+        actions.idleBoth = mixer.clipAction(withoutArms(idle, 'both'));
+        actions.runBoth = mixer.clipAction(withoutArms(run, 'both'));
         // A missing clip is survivable: the action stays undefined and
         // cast()/flash() degrade to the emissive flash on their own.
         for (const [key, clip] of [['cast', find(/cast/i)], ['hit', find(/hit/i)]]) {
@@ -382,15 +478,30 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
       team.emissiveIntensity = 1.45 + hit * 4 + telegraph * 3.5;
       root.scale.set(1 + hit * 0.05, 1 - hit * 0.04, 1 + hit * 0.05);
       if (mixer) {
-        if (!oneShot) play(speed > 0.5 ? actions.run : actions.idle);
+        // Hands busy -> the armless pair, so the clip stops fighting the solver.
+        // A one-shot (cast, hit) still outranks both: those are whole-body
+        // reactions and cutting their arms off would leave the duelist flinching
+        // with one shoulder.
+        if (!oneShot) {
+          const moving = speed > 0.5;
+          // Which mask, if any. Driven off the blend weights rather than off
+          // the raw targets: the gate can flicker for a frame, and swapping
+          // clips on a flicker restarts a crossfade every frame, which is its
+          // own kind of broken.
+          const masked = drawWeight > 0.01 ? 'both' : reachWeight > 0.01 ? 'right' : null;
+          play(masked === 'both' ? (moving ? actions.runBoth : actions.idleBoth)
+            : masked === 'right' ? (moving ? actions.runRight : actions.idleRight)
+            : (moving ? actions.run : actions.idle));
+        }
         // The run cycle depicts a body moving at RUN_CLIP_SPEED. Play it at a
         // fixed rate while the duelist travels at some other speed and the feet
         // skate -- at DUEL.playerSpeed of 8.5 that is a 3x mismatch, which is
         // what makes the run read as broken. Driving timeScale off the measured
         // speed plants the feet at any tuning, and every Meshy run clip tested
         // sat at the same ~2.9, so this holds if the clip is ever swapped.
-        if (actions.run) {
-          actions.run.timeScale = clamp(speed / RUN_CLIP_SPEED, 0.4, MAX_RUN_TIMESCALE);
+        const runRate = clamp(speed / RUN_CLIP_SPEED, 0.4, MAX_RUN_TIMESCALE);
+        for (const key of ['run', 'runRight', 'runBoth']) {
+          if (actions[key]) actions[key].timeScale = runRate;
         }
         mixer.update(dt);
       }
@@ -446,12 +557,20 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
         // the arm sits between the two, drawing nothing and holding nothing.
         const reachWanted = reachTarget && drawWeight <= 0.01 ? 1 : 0;
         reachWeight += (reachWanted - reachWeight) * Math.min(1, dt * REACH_FADE);
+        if (reachTarget) {
+          lastReach.lerp(reachTarget, Math.min(1, dt * REACH_TRACK));
+          // Belt and braces: if anything upstream still manages to poison the
+          // ease, recover to the target rather than carrying NaN forward.
+          if (!Number.isFinite(lastReach.x) || !Number.isFinite(lastReach.y) || !Number.isFinite(lastReach.z)) {
+            lastReach.copy(reachTarget);
+          }
+        }
         if (reachWeight > 0.01) {
           root.updateMatrixWorld(true);
           armIK.solve(lastReach, reachWeight);
         }
         if (castSpark) {
-          castSpark.group.visible = reachWeight > 0.01;
+          castSpark.group.visible = castSparkEnabled && reachWeight > 0.01;
           if (castSpark.group.visible) {
             // Positioned from the wrist's world transform each frame rather than
             // parented to the bone: the Armature carries a 0.01 scale, so a child

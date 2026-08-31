@@ -11,9 +11,9 @@ import { createOpponentController } from './arena/opponent.js';
 import { createSpellSystem } from './arena/spell-system.js';
 import { createPerformanceGovernor } from './arena/performance.js';
 import { createMatch, updateMatch, damage, spendMana, disruptCore } from './arena/match.js';
-import { createBeam } from './spells/beam.js';
+import { createHalo } from './spells/halo.js';
 import { initTracker, getFrame, isReady, disposeTracker } from './spell-room/tracker.js';
-import { isPinching, updateCast, currentStroke, resetMagic, RUNES, pinchDebug } from './spell-room/magic.js';
+import { isPinching, updateCast, currentStroke, resetMagic, RUNES, pinchDebug, TUNE } from './spell-room/magic.js';
 import { createBowState } from './spell-room/archery.js';
 import { createBowAim } from './spell-room/aim.js';
 import { createInputMode } from './spell-room/input-mode.js';
@@ -52,6 +52,10 @@ const camera = new THREE.PerspectiveCamera(58, 1, 0.1, 180);
 scene.environment = buildEnvironment(renderer);
 const arena = buildArena(scene);
 const spells = createSpellSystem(scene);
+
+spells.loadAegis('assets/models/arena/aegis-barrier.glb')
+  .then(() => setStatus('Meshy Aegis loaded'))
+  .catch(error => setStatus(`Aegis: ${error.message}`));
 
 const playerPosition = new THREE.Vector3(0, 0, 14);
 const opponentPosition = new THREE.Vector3(0, 0, -12);
@@ -217,51 +221,65 @@ function laneHits(from, to, targetPosition, radius) {
   return _closest.distanceTo(_targetCentre) <= radius + 0.75;
 }
 
-const playerBeam = createBeam({
-  scene,
-  onHit(from, to, radius, amount) {
-    let hit = false;
-    if (laneHits(from, to, opponentPosition, radius)) {
-      if (spells.absorb('opponent', performance.now())) {
-        setStatus('rival Aegis absorbed Ringfall');
-      } else {
-        damage(match, 'opponent', amount);
-        opponentAvatar.flash();
-      }
-      hit = true;
+function hitPlayerRingfall(from, to, radius, amount) {
+  let hit = false;
+  if (laneHits(from, to, opponentPosition, radius)) {
+    if (spells.absorb('opponent', performance.now())) {
+      setStatus('rival Aegis absorbed Ringfall');
+    } else {
+      damage(match, 'opponent', amount);
+      opponentAvatar.flash();
     }
-    if (laneHits(from, to, arena.cores.opponent.position, radius)) {
-      disruptAndSpill('opponent');
-      hit = true;
-    }
-    return hit && match.opponent.hp <= 0 ? 1 : 0;
-  },
-});
+    hit = true;
+  }
+  if (laneHits(from, to, arena.cores.opponent.position, radius)) {
+    disruptAndSpill('opponent');
+    hit = true;
+  }
+  return hit && match.opponent.hp <= 0 ? 1 : 0;
+}
 
-const opponentBeam = createBeam({
-  scene,
-  colours: [0xffffff, 0xc7baff, 0x755cff],
-  onHit(from, to, radius, amount) {
-    const hitsPlayer = laneHits(from, to, playerPosition, radius);
-    if (laneHits(from, to, arena.cores.player.position, radius)) disruptAndSpill('player');
-    if (!hitsPlayer) return 0;
-    if (spells.absorb('player', performance.now())) {
-      flashUntil = performance.now() + 320;
-      flashKind = 'blocked';
-      setStatus('Aegis absorbed the spell');
-      return 0;
-    }
-    damage(match, 'player', amount);
-    playerAvatar.flash();
+function hitOpponentRingfall(from, to, radius, amount) {
+  const hitsPlayer = laneHits(from, to, playerPosition, radius);
+  if (laneHits(from, to, arena.cores.player.position, radius)) disruptAndSpill('player');
+  if (!hitsPlayer) return 0;
+  if (spells.absorb('player', performance.now())) {
     flashUntil = performance.now() + 320;
-    flashKind = 'hit';
-    return match.player.hp <= 0 ? 1 : 0;
-  },
-});
+    flashKind = 'blocked';
+    setStatus('Aegis absorbed the spell');
+    return 0;
+  }
+  damage(match, 'player', amount);
+  playerAvatar.flash();
+  flashUntil = performance.now() + 320;
+  flashKind = 'hit';
+  return match.player.hp <= 0 ? 1 : 0;
+}
+
+// Ringfall's ring. One loaded model, two tinted instances -- the rival casts
+// the same spell and it must not read as the player's.
+const playerHalo = createHalo(scene, 0xffd98a);
+const opponentHalo = createHalo(scene, 0x9b87ff);
+
+(async () => {
+  const url = 'assets/models/arena/ringfall-halo.glb';
+  try {
+    const response = await fetch(url, { method: 'HEAD' });
+    if (!response.ok) return;
+    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+    const gltf = await new GLTFLoader().loadAsync(url);
+    playerHalo.attach(gltf.scene.clone(true));
+    opponentHalo.attach(gltf.scene.clone(true));
+  } catch (error) {
+    setStatus(`halo: ${error.message}`);
+  }
+})();
 
 const _castOrigin = new THREE.Vector3();
 const _castTarget = new THREE.Vector3();
 const _castDirection = new THREE.Vector3();
+const _ringfallEnd = new THREE.Vector3();
+const _ringfallVisualOrigin = new THREE.Vector3();
 
 function castRingfall(charge, now, { free = false } = {}) {
   if (match.phase !== 'playing' || cooldowns.ringfall > 0) {
@@ -280,12 +298,13 @@ function castRingfall(charge, now, { free = false } = {}) {
   _castOrigin.copy(playerPosition).setY(1.65);
   _castTarget.copy(targetMode === 'core' ? arena.cores.opponent.position : opponentPosition).setY(1.55);
   _castDirection.subVectors(_castTarget, _castOrigin).normalize();
-  playerBeam.fire(_castOrigin, _castDirection, {
-    length: 42,
-    radius: lerp(1.1, 2.5, power),
-    damage: lerp(DUEL.ringfallDamageMin, DUEL.ringfallDamageMax, power),
-    seconds: 0.5 + power * 0.38,
-  });
+  const length = 42;
+  const radius = lerp(1.1, 2.5, power);
+  const amount = lerp(DUEL.ringfallDamageMin, DUEL.ringfallDamageMax, power);
+  _ringfallEnd.copy(_castOrigin).addScaledVector(_castDirection, length);
+  hitPlayerRingfall(_castOrigin, _ringfallEnd, radius, amount);
+  const visualOrigin = playerAvatar.handWorld(_ringfallVisualOrigin) ?? _castOrigin;
+  playerHalo.release(visualOrigin, _castDirection, power);
   cooldowns.ringfall = DUEL.ringfallCooldown;
   lastCast = { name: 'Ringfall', charge: power };
   lastCastAt = now;
@@ -354,12 +373,9 @@ function botCast(target) {
   const origin = _castOrigin.copy(opponentPosition).setY(1.65);
   const destination = _castTarget.copy(target).setY(1.55);
   const direction = _castDirection.subVectors(destination, origin).normalize();
-  opponentBeam.fire(origin, direction, {
-    length: Math.max(10, origin.distanceTo(destination) + 2),
-    radius: 1.25,
-    damage: DUEL.botDamage,
-    seconds: 0.65,
-  });
+  opponentHalo.release(origin, direction, 0.7);
+  _ringfallEnd.copy(origin).addScaledVector(direction, Math.max(10, origin.distanceTo(destination) + 2));
+  hitOpponentRingfall(origin, _ringfallEnd, 1.25, DUEL.botDamage);
 }
 
 // ─── Bow shot ────────────────────────────────────────────────────────────────
@@ -488,6 +504,10 @@ addEventListener('keydown', event => {
   if (event.code === 'KeyJ') castPlayerSpell(selectedRuneId, 0.3, performance.now());
   if (event.code === 'KeyK') castPlayerSpell(selectedRuneId, 1, performance.now());
   if (event.code === 'KeyR' && match.phase === 'finished') resetRound();
+  if (event.code === 'KeyN') {
+    if (simCharge === null) { simCharge = TUNE.CHARGE_MIN; setStatus('charging — N to loose'); }
+    else releaseSimulatedCharge(performance.now());
+  }
   // Camera-free QA for the body pose. Live tracking owns the same pose whenever
   // it is on, so these keys only have an effect under ?nocam or after H turns the
   // webcam off.
@@ -815,8 +835,13 @@ function updateHand(now) {
   }
   const gate = isPinching(frame.tracked ? frame.landmarks : null, frame.handScale, now);
   const cast = updateCast(gate && frame.tracked, frame.tip, now);
-  playerAvatar.reach(gate && frame.tracked ? handTarget(frame.tip) : null, cast.charge);
+  const ringfallCharging = cast.phase === 'charging' && cast.rune?.id === 'ringfall';
+  playerAvatar.reach(gate && frame.tracked ? handTarget(frame.tip) : null, cast.charge, !ringfallCharging);
   playerCharging = cast.phase === 'charging';
+  // The ring forms at the hand while the charge is held, and only then goes.
+  // Ringfall only: Aegis and Gravity Seal are not this shape and borrowing the
+  // halo for them would make the charge stop telling you which rune you drew.
+  updateHaloCharge(ringfallCharging, cast.charge);
   if (cast.event?.type === 'fired') castPlayerSpell(cast.event.rune.id, cast.event.charge, now);
   else if (cast.event?.type === 'overloaded') {
     flashUntil = now + 520;
@@ -828,11 +853,93 @@ function updateHand(now) {
   drawHandLayer(frame, gate, cast);
 }
 
+// Hold Ringfall's ring at the casting hand while the charge builds. The hand
+// comes from the rig rather than from the body's position: IK is what moved it,
+// so anything else drifts away from the arm the player can see.
+const _handWorld = new THREE.Vector3();
+const _haloForward = new THREE.Vector3();
+
+// Simulated charge for keyboard QA. Without a camera there is no hold phase at
+// all -- J and K fire instantly -- so the one part of Ringfall worth looking at
+// is the one part `?nocam` could not reach. N starts the hold, N again looses
+// it, exactly as pinch-and-release does.
+let simCharge = null;
+
+function updateSimulatedCharge(dt, now) {
+  if (simCharge === null) return;
+  simCharge = clamp(simCharge + dt / (TUNE.CHARGE_FULL_MS / 1000), TUNE.CHARGE_MIN, 1);
+  // Park the camera-free QA hand clear of the head, so N actually exposes the
+  // held model it exists to inspect. Live tracking still uses the real tip.
+  playerAvatar.reach(handTarget({ x: 0.68, y: 0.42 }), simCharge, false);
+  updateHaloCharge(true, simCharge);
+  void now;
+}
+
+function releaseSimulatedCharge(now) {
+  if (simCharge === null) return;
+  const power = simCharge;
+  simCharge = null;
+  playerAvatar.reach(null);
+  castPlayerSpell('ringfall', power, now);
+}
+
+function updateHaloCharge(charging, charge) {
+  if (!charging) return;
+  const hand = playerAvatar.handWorld(_handWorld);
+  if (!hand) return;
+  _haloForward
+    .subVectors(targetMode === 'core' ? arena.cores.opponent.position : opponentPosition, hand)
+    .setY(0)
+    .normalize();
+  playerHalo.hold(hand, charge, _haloForward, camera.position);
+}
+
 // ─── Loop ─────────────────────────────────────────────────────────────────────
 
 let last = performance.now();
+
+// ─── Failing loudly ──────────────────────────────────────────────────────────
+//
+// An exception thrown inside a requestAnimationFrame callback stops the chain
+// dead: the last frame stays on the glass and the game looks frozen with
+// nothing at all to say for itself. That is indistinguishable from a hung GPU,
+// and it is not something anyone can diagnose while standing two metres from
+// the laptop with both hands in the air -- which is the only way this game is
+// played. A one-character name collision cost an evening on exactly this.
+//
+// So the frame is wrapped and the failure is put where the player can read it.
+let fatalError = null;
+
+function reportFatal(error, where) {
+  if (fatalError) return;
+  fatalError = error;
+  running = false;
+  console.error(`[veilcore] ${where}`, error);
+  const text = `${where} — ${error?.message ?? error}`;
+  setStatus(text);
+  if (errorLine) {
+    errorLine.hidden = false;
+    errorLine.textContent = `${text}. Reload to restart; the console has the stack.`;
+  }
+}
+
+// Anything thrown outside the loop -- the tracker's own callback, a late asset
+// load -- would otherwise reach only the console.
+addEventListener('error', event => reportFatal(event.error ?? event.message, 'uncaught'));
+addEventListener('unhandledrejection', event => reportFatal(event.reason, 'unhandled rejection'));
+
 function loop(now) {
   if (!running) return;
+  try {
+    step(now);
+  } catch (error) {
+    reportFatal(error, 'frame');
+    return;
+  }
+  requestAnimationFrame(loop);
+}
+
+function step(now) {
   const dt = Math.min((now - last) / 1000, 0.08);
   last = now;
   worldTime += dt;
@@ -841,6 +948,7 @@ function loop(now) {
   const playerSpeed = movePlayer(dt, now);
   playerAvatar.setPosition(playerPosition);
   updateHand(now);
+  updateSimulatedCharge(dt, now);
   playerAvatar.update(dt, playerSpeed);
 
   const spellState = spells.update(dt, now, { player: playerPosition, opponent: opponentPosition });
@@ -870,8 +978,8 @@ function loop(now) {
   arena.update(worldTime, match);
 
   for (const id of Object.keys(cooldowns)) cooldowns[id] = Math.max(0, cooldowns[id] - dt);
-  playerBeam.update(dt);
-  opponentBeam.update(dt);
+  playerHalo.update(dt);
+  opponentHalo.update(dt);
   updateArrows(dt);
   updateCamera(dt);
 
@@ -888,7 +996,6 @@ function loop(now) {
   }
   drawHud(now, botState);
   drawSelfie(getFrame());
-  requestAnimationFrame(loop);
 }
 
 function resetRound() {
@@ -1307,8 +1414,8 @@ addEventListener('beforeunload', () => {
   for (const arrow of arrows) arrow.mesh.removeFromParent();
   arrowGeometry.dispose();
   arrowMaterial.dispose();
-  playerBeam.dispose();
-  opponentBeam.dispose();
+  playerHalo.dispose();
+  opponentHalo.dispose();
   spells.dispose();
   playerAvatar.dispose();
   opponentAvatar.dispose();

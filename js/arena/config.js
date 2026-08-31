@@ -26,10 +26,17 @@ export const DUEL = Object.freeze({
   bowDamageMin: 12,
   bowDamageMax: 34,
   arrowSpeed: 105,
-  botSpeed: 4.0,
-  botWindup: 0.72,
-  botRecovery: 2.5,
-  botDamage: 12,
+  // Deliberately forgiving while gesture input is being tuned: the telegraph is
+  // long enough to see during a stroke, a miss does not erase a quarter of a
+  // test run, and the rival cannot immediately repeat the shot.
+  botSpeed: 3.0,
+  botWindup: 1.4,
+  botRecovery: 4.5,
+  botDamage: 6,
+  botShieldInitialDelay: 8,
+  botShieldCooldown: 20,
+  botShieldHp: 35,
+  botShieldRecovery: 1.2,
   // What a rival attack costs it. Its attacks used to be free while yours cost
   // 20, which made its mana bar and its interest in the Well pure decoration --
   // it could out-trade you from anywhere on the map. Priced, the Well decides

@@ -27,6 +27,11 @@ export function createArmIK(root, { shoulder, elbow, wrist, pole }) {
   const ab = new THREE.Vector3(), cb = new THREE.Vector3(), ac = new THREE.Vector3(), at = new THREE.Vector3();
   const axis = new THREE.Vector3(), fallback = new THREE.Vector3();
   const spin = new THREE.Quaternion(), parentWorld = new THREE.Quaternion(), boneWorld = new THREE.Quaternion();
+  // Scratch for the elbow twist below.
+  const poleWorld = new THREE.Vector3(), spanAxis = new THREE.Vector3();
+  const poleNow = new THREE.Vector3(), poleWant = new THREE.Vector3();
+  const poleSpan = new THREE.Vector3(), poleCross = new THREE.Vector3();
+  const rootQuaternion = new THREE.Quaternion();
 
   // Rotate a bone by a world-space axis/angle, expressed back in its parent's
   // frame. Bones live in local space, so a world rotation cannot be applied
@@ -56,6 +61,45 @@ export function createArmIK(root, { shoulder, elbow, wrist, pole }) {
       const upper = a.distanceTo(b);
       const fore = b.distanceTo(c);
       if (upper < EPS || fore < EPS) return;
+
+      // ── Put the elbow somewhere predictable, first ──
+      //
+      // Everything below derives the bend plane from where the arm CURRENTLY
+      // is. That is fine for a body standing still and wrong for one that is
+      // running: the locomotion clip swings the arm through a new plane every
+      // frame, the solve inherits it, and the elbow wanders around the wrist
+      // in circles -- which is what the arm tying itself in a knot actually
+      // was.
+      //
+      // Spinning the chain about the shoulder->wrist line moves the elbow
+      // WITHOUT moving the wrist, because the wrist lies on that line. So the
+      // elbow can be parked against a fixed hint before any of the angle work
+      // happens, and the plane stops depending on the clip.
+      if (pole) {
+        root.getWorldQuaternion(rootQuaternion);
+        poleWorld.copy(pole).applyQuaternion(rootQuaternion).normalize();
+        spanAxis.copy(c).sub(a);
+        if (spanAxis.lengthSq() > EPS) {
+          spanAxis.normalize();
+          // Both the current and the wanted elbow direction, measured square
+          // to the span so the comparison is a pure rotation about it.
+          poleSpan.copy(b).sub(a);
+          poleNow.copy(poleSpan).addScaledVector(spanAxis, -poleSpan.dot(spanAxis));
+          poleWant.copy(poleWorld).addScaledVector(spanAxis, -poleWorld.dot(spanAxis));
+          if (poleNow.lengthSq() > EPS && poleWant.lengthSq() > EPS) {
+            poleNow.normalize();
+            poleWant.normalize();
+            const cos = clamp(poleNow.dot(poleWant), -1, 1);
+            // Signed: the unsigned angle would swing the elbow the long way
+            // round half the time, which reads as the arm flipping.
+            const sign = Math.sign(poleCross.copy(poleNow).cross(poleWant).dot(spanAxis)) || 1;
+            rotateWorld(bones.shoulder, spanAxis, Math.acos(cos) * sign * weight);
+            bones.shoulder.getWorldPosition(a);
+            bones.elbow.getWorldPosition(b);
+            bones.wrist.getWorldPosition(c);
+          }
+        }
+      }
 
       // Blending in world space keeps the elbow on a sane arc; blending the
       // final quaternions instead can swing it through the torso.

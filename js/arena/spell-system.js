@@ -17,8 +17,8 @@ function energyMaterial(colour, opacity) {
 /** Lightweight arena-only defence and control effects. */
 export function createSpellSystem(scene) {
   const shields = {
-    player: makeShield(scene, GOLD),
-    opponent: makeShield(scene, VIOLET),
+    player: makeShield(scene, 'player'),
+    opponent: makeShield(scene, 'opponent'),
   };
   const seal = makeSeal(scene);
   const state = {
@@ -66,7 +66,6 @@ export function createSpellSystem(scene) {
       visual.group.position.copy(positions[side]).setY(1.65);
       const pulse = 1 + Math.sin(now * 0.009) * 0.035;
       visual.group.scale.setScalar(pulse);
-      visual.ring.rotation.z += dt * (side === 'player' ? 0.8 : -0.8);
     }
 
     if (state.seal.until > now) {
@@ -93,6 +92,43 @@ export function createSpellSystem(scene) {
   return {
     castAegis,
     castGravity,
+    async loadAegis(url) {
+      const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+      const gltf = await new GLTFLoader().loadAsync(url);
+      gltf.scene.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(gltf.scene);
+      const size = box.getSize(new THREE.Vector3());
+      const centre = box.getCenter(new THREE.Vector3());
+      const scale = 3.65 / Math.max(size.y, 0.001);
+
+      for (const [side, shield] of Object.entries(shields)) {
+        const model = gltf.scene.clone(true);
+        model.name = `${side} Meshy Aegis`;
+        model.scale.setScalar(scale);
+        model.position.set(-centre.x * scale, -centre.y * scale, -centre.z * scale);
+        model.traverse(object => {
+          if (!object.isMesh) return;
+          object.castShadow = false;
+          object.receiveShadow = false;
+          if (object.material) {
+            object.material = object.material.clone();
+            object.material.side = THREE.DoubleSide;
+            const teamColour = new THREE.Color(side === 'player' ? GOLD : VIOLET);
+            if ('color' in object.material) {
+              // Preserve the baked porcelain and gold, but make the rival read
+              // purple at combat distance instead of looking like your shield.
+              object.material.color.lerp(teamColour, side === 'player' ? 0.12 : 0.38);
+            }
+            if ('emissive' in object.material) {
+              object.material.emissive.copy(teamColour);
+              object.material.emissiveIntensity = side === 'player' ? 0.18 : 0.32;
+            }
+          }
+        });
+        shield.mount.clear();
+        shield.mount.add(model);
+      }
+    },
     absorb,
     update,
     isShielded: (side, now) => state[side].shieldUntil > now,
@@ -115,21 +151,16 @@ export function createSpellSystem(scene) {
   };
 }
 
-function makeShield(scene, colour) {
+function makeShield(scene, side) {
   const group = new THREE.Group();
-  const shell = new THREE.Mesh(
-    new THREE.SphereGeometry(1.75, 24, 14),
-    energyMaterial(colour, 0.14),
-  );
-  const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(1.78, 0.035, 6, 48),
-    energyMaterial(colour, 0.78),
-  );
-  ring.rotation.x = Math.PI / 2;
-  group.add(shell, ring);
+  const mount = new THREE.Group();
+  // Keep the baked shield in front of its owner rather than intersecting the
+  // body. The arena always begins with the player on +Z and the rival on -Z.
+  mount.position.z = side === 'player' ? -0.58 : 0.58;
+  group.add(mount);
   group.visible = false;
   scene.add(group);
-  return { group, ring };
+  return { group, mount };
 }
 
 function makeSeal(scene) {
