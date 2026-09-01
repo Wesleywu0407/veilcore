@@ -353,6 +353,13 @@ export function createDuelist(scene, {
   let reachTarget = null;    // world Vector3, or null to let the animation have the arm back
   let reachWeight = 0;
   const lastReach = new THREE.Vector3();   // kept so the fade-out has somewhere to go
+  // Where the player's own elbow is, when the body model can see it. Eased the
+  // same way the hand target is: a bend hint that jumps reads as the arm
+  // snapping through itself, which is the thing this is here to stop.
+  let elbowTarget = null;    // world Vector3, or null for the fixed pole
+  const lastElbow = new THREE.Vector3();
+  const _poleHint = new THREE.Vector3();
+  const _shoulderWorld = new THREE.Vector3();
   let imported = null;
   let headBone = null;
   let eyeLocal = null;   // the head's REST position in root space, measured at load
@@ -407,7 +414,7 @@ export function createDuelist(scene, {
      * to the line the player was drawing. The caller unprojects; this just
      * reaches.
      */
-    reach(point, charge = 0, showCastSpark = true) {
+    reach(point, charge = 0, showCastSpark = true, elbow = null) {
       chargeGlow = clamp(charge, 0, 1);
       castSparkEnabled = showCastSpark;
       // A single non-finite frame used to be harmless, because the target was
@@ -441,6 +448,19 @@ export function createDuelist(scene, {
       }
       // A bad point while already reaching keeps the previous target: holding
       // still for a frame reads as tracking, dropping the arm reads as a bug.
+
+      // The elbow is optional and separately fallible: the body model runs at
+      // half the hands' rate and drops a joint the moment an arm crosses the
+      // torso. Losing it mid-stroke has to fall back to the fixed pole rather
+      // than freeze the bend where it was, or the arm keeps a shape the player
+      // stopped holding.
+      if (elbow && Number.isFinite(elbow.x) && Number.isFinite(elbow.y) && Number.isFinite(elbow.z)) {
+        elbowTarget = elbowTarget ?? new THREE.Vector3();
+        elbowTarget.copy(elbow);
+        if (reachWeight <= 0.01) lastElbow.copy(elbow);
+      } else {
+        elbowTarget = null;
+      }
     },
     get reaching() { return reachWeight > 0.01; },
     /**
@@ -779,7 +799,18 @@ export function createDuelist(scene, {
         }
         if (reachWeight > 0.01) {
           root.updateMatrixWorld(true);
-          armIK.solve(lastReach, reachWeight);
+          let hint = null;
+          if (elbowTarget && shoulderLocal) {
+            lastElbow.lerp(elbowTarget, Math.min(1, dt * REACH_TRACK));
+            // The solver wants a DIRECTION from the shoulder, not a point. That
+            // matters: the tracked elbow's depth is the weakest number the body
+            // model produces, while which way the elbow is offset -- up, down,
+            // out, tucked in -- is what it is actually good at, and is all the
+            // bend plane needs.
+            _poleHint.copy(lastElbow).sub(root.localToWorld(_shoulderWorld.copy(shoulderLocal)));
+            hint = _poleHint;
+          }
+          armIK.solve(lastReach, reachWeight, hint);
         }
         if (castFocus.ready) {
           castFocus.group.visible = castSparkEnabled && reachWeight > 0.01;

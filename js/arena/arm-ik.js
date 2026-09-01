@@ -50,8 +50,15 @@ export function createArmIK(root, { shoulder, elbow, wrist, pole }) {
     /**
      * @param target world-space point the wrist should reach
      * @param weight 0 leaves the animation alone, 1 fully commits to the target
+     * @param poleHint optional WORLD-space direction the elbow should sit in,
+     *   measured from the shoulder. Pass the tracked elbow when there is one:
+     *   the constructor's `pole` is a fixed guess about where a bend belongs,
+     *   and a fixed guess is exactly how an elbow ends up inside the ribs when
+     *   the player holds their arm somewhere the guess did not anticipate. Null
+     *   falls back to that guess, which is what a session with no body model
+     *   gets.
      */
-    solve(target, weight = 1) {
+    solve(target, weight = 1, poleHint = null) {
       if (weight <= 0) return;
       bones.shoulder.updateMatrixWorld(true);
       bones.shoulder.getWorldPosition(a);
@@ -75,9 +82,14 @@ export function createArmIK(root, { shoulder, elbow, wrist, pole }) {
       // WITHOUT moving the wrist, because the wrist lies on that line. So the
       // elbow can be parked against a fixed hint before any of the angle work
       // happens, and the plane stops depending on the clip.
-      if (pole) {
-        root.getWorldQuaternion(rootQuaternion);
-        poleWorld.copy(pole).applyQuaternion(rootQuaternion).normalize();
+      const tracked = poleHint && poleHint.lengthSq() > EPS;
+      if (tracked || pole) {
+        if (tracked) {
+          poleWorld.copy(poleHint).normalize();
+        } else {
+          root.getWorldQuaternion(rootQuaternion);
+          poleWorld.copy(pole).applyQuaternion(rootQuaternion).normalize();
+        }
         spanAxis.copy(c).sub(a);
         if (spanAxis.lengthSq() > EPS) {
           spanAxis.normalize();

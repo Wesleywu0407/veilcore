@@ -1225,7 +1225,12 @@ function updateHand(now) {
   const gate = isPinching(frame.tracked ? frame.landmarks : null, frame.handScale, now);
   const cast = updateCast(gate && frame.tracked, frame.tip, now);
   const ringfallCharging = cast.phase === 'charging' && cast.rune?.id === 'ringfall';
-  playerAvatar.reach(gate && frame.tracked ? handTarget(frame.tip) : null, cast.charge, !ringfallCharging);
+  playerAvatar.reach(
+    gate && frame.tracked ? handTarget(frame.tip) : null,
+    cast.charge,
+    !ringfallCharging,
+    elbowTarget(frame.pose?.right),
+  );
   playerCharging = cast.phase === 'charging';
   // The ring forms at the hand while the charge is held, and only then goes.
   // Ringfall only: Aegis and Gravity Seal are not this shape and borrowing the
@@ -1554,6 +1559,32 @@ const _handTarget = new THREE.Vector3();
 function handTarget(tip) {
   _handTarget.set(tip.x * 2 - 1, -(tip.y * 2 - 1), 0.5).unproject(castCamera);
   return _handTarget.sub(castCamera.position).normalize()
+    .multiplyScalar(HAND_DEPTH).add(castCamera.position);
+}
+
+// The player's own elbow, put through the same lens as their fingertip.
+//
+// Deliberately the SAME depth as the hand rather than a shorter one of its own,
+// and not because a second constant would be tedious -- because the shared
+// depth is what makes this correct.
+//
+// Both points land on one sphere around the camera, so the elbow minus the
+// wrist is a purely sideways offset: exactly the screen-space gap between them,
+// carried into the world. The IK then throws away everything along the
+// shoulder-to-wrist line before using the hint, and what is left of
+// `elbow - shoulder` after that is precisely that sideways offset. The bogus
+// forward depth cancels out of the only quantity anybody reads.
+//
+// Which is also the honest limit of this: the body model is being asked which
+// SIDE of the arm the elbow sticks out on, which is what a camera can actually
+// see, and never how far away it is, which is what it cannot.
+const _elbowTarget = new THREE.Vector3();
+
+function elbowTarget(arm) {
+  const elbow = arm?.elbow;
+  if (!elbow) return null;
+  _elbowTarget.set(elbow.x * 2 - 1, -(elbow.y * 2 - 1), 0.5).unproject(castCamera);
+  return _elbowTarget.sub(castCamera.position).normalize()
     .multiplyScalar(HAND_DEPTH).add(castCamera.position);
 }
 
