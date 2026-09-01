@@ -138,6 +138,26 @@ the keyboard too.
 | **H** | turn hand tracking on or off, without reloading |
 | **R** | next round, once the match has finished |
 
+## Mirror — the body on its own
+
+`mirror.html` is the duel with everything else taken away: one duelist, your
+body, and a panel of the numbers being read off it. No runes, no bow, no rival,
+no clock, no quality governor competing for the frame.
+
+It exists because the duel is a bad place to judge tracking. A wrist that looks
+wrong there might be the tracking, or might be a spell that moved the camera,
+or a stance that swapped which arm is being solved. Here there is nothing else
+it could be.
+
+It imports `duelist.js`, `tracker.js` and `fingers.js` unchanged, so anything
+tuned in the mirror is tuned in the duel. **V** switches between orbit and first
+person; drag to turn.
+
+One deliberate difference: the mirror has a single camera, and the hand is
+unprojected through the same one you are looking through. The duel keeps a
+separate `castCamera` for that, which is what once put the eye in front of the
+hand in first person and made a raised arm invisible.
+
 The camera normally decides for itself: it sits behind you, swings over your
 shoulder while you draw a rune, and goes to your own eye whenever the bow or the
 fists come up. **V** holds it at the eye regardless — which is the only way to
