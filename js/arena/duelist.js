@@ -617,9 +617,19 @@ export function createDuelist(scene, {
         }
         reachTarget = reachTarget ?? new THREE.Vector3();
         reachTarget.copy(limitedPoint);
-        // The first frame snaps, so the arm does not fly in from wherever it
-        // was left last time.
-        if (reachWeight <= 0.01) lastReach.copy(limitedPoint);
+        // On acquisition, start the ease at the wrist's LIVE position rather
+        // than at the target.
+        //
+        // Snapping to the target was hiding the reach: with lastReach already
+        // at the destination, the only thing left to animate was the IK weight
+        // fading in over a twelfth of a second, so the arm appeared at full
+        // extension rather than travelling there. Reading the bone gives the
+        // ease somewhere real to start from -- and it is not the stale value
+        // the snap was guarding against, because it is where the arm is now.
+        if (reachWeight <= 0.01 && armIK) {
+          root.updateMatrixWorld(true);
+          armIK.bones.wrist.getWorldPosition(lastReach);
+        }
       } else if (!point) {
         reachTarget = null;
       }
@@ -652,7 +662,11 @@ export function createDuelist(scene, {
       if (point && Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z)) {
         leftReachTarget = leftReachTarget ?? new THREE.Vector3();
         leftReachTarget.copy(point);
-        if (leftReachWeight <= 0.01) lastLeftReach.copy(point);
+        // Same as the rune hand: ease out from where the arm actually is.
+        if (leftReachWeight <= 0.01 && leftIK) {
+          root.updateMatrixWorld(true);
+          leftIK.bones.wrist.getWorldPosition(lastLeftReach);
+        }
       } else {
         leftReachTarget = null;
       }

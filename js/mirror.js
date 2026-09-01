@@ -51,7 +51,22 @@ const DUELIST_CLIPS = [];
 // How far in front of the lens the hand is placed. The duel uses 1.47 against a
 // camera parked behind the shoulder; here the camera is the eye itself, so this
 // is a real arm's reach from a real eye and nothing cancels out.
-const HAND_DEPTH = 0.62;
+// ── Where a tracked hand goes, in the BODY's space and not the viewer's ──
+//
+// The hand used to be unprojected through the orbit camera and parked a fixed
+// distance in front of it. That put the target out in the air between the
+// viewer and the duelist -- and worse, it made the hand orbit with the camera,
+// so turning to look at the body from the side dragged the arm around with it.
+// A mirror cannot do that: the reflection has to belong to the body, not to
+// wherever you happen to be standing.
+//
+// So the picture maps onto a box hung in front of the duelist's own chest.
+// Fractions of its height, so a character rebuilt at a different scale still
+// reaches the same way.
+const REACH_ACROSS = 0.42;   // half-width of the box, side to side
+const REACH_RISE = 0.34;     // half-height, measured about the shoulder line
+const REACH_SHOULDER = 0.82; // up the body, where that box is centred
+const REACH_FORWARD = 0.26;  // out in front of the chest
 const EYE_AHEAD = 0.30;    // clears the porcelain helm, same as the duel
 const ORBIT_DISTANCE = 3.6;
 const ORBIT_HEIGHT = 2.4;
@@ -157,9 +172,16 @@ const _across = { left: new THREE.Vector3(), right: new THREE.Vector3() };
 
 /** Straight through the one camera, at a fixed depth. */
 function handTarget(tip) {
-  _handTarget.set(tip.x * 2 - 1, -(tip.y * 2 - 1), 0.5).unproject(camera);
-  return _handTarget.sub(camera.position).normalize()
-    .multiplyScalar(HAND_DEPTH).add(camera.position);
+  const height = avatar.height;
+  // Negated across: the tracker hands back x already un-mirrored, so the
+  // player's right hand carries the LARGER x, while the duelist's own local +X
+  // is its left. Without the flip the reflection reaches across itself.
+  _handTarget.set(
+    -(tip.x - 0.5) * 2 * REACH_ACROSS * height,
+    (REACH_SHOULDER + (0.5 - tip.y) * 2 * REACH_RISE) * height,
+    REACH_FORWARD * height,
+  );
+  return avatar.root.localToWorld(_handTarget);
 }
 
 // Same mirror correction the duel makes, and for the same reason: tracker.js
@@ -225,9 +247,15 @@ function driveBody(frame) {
 const _elbow = new THREE.Vector3();
 function elbowTarget(arm) {
   if (!arm?.elbow) return null;
-  _elbow.set(arm.elbow.x * 2 - 1, -(arm.elbow.y * 2 - 1), 0.5).unproject(camera);
-  return _elbow.sub(camera.position).normalize()
-    .multiplyScalar(HAND_DEPTH).add(camera.position);
+  // Through the same box as the hand, or the bend hint would be describing a
+  // point in a different space from the wrist it is meant to bend toward.
+  const height = avatar.height;
+  _elbow.set(
+    -(arm.elbow.x - 0.5) * 2 * REACH_ACROSS * height,
+    (REACH_SHOULDER + (0.5 - arm.elbow.y) * 2 * REACH_RISE) * height,
+    REACH_FORWARD * height,
+  );
+  return avatar.root.localToWorld(_elbow);
 }
 
 // ─── Readout ──────────────────────────────────────────────────────────────────
