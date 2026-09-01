@@ -37,22 +37,21 @@ const MODEL_URL =
 const POSE_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
 
-// ── The body model is OFF by default, and that is a considered trade ──
+// ── Paying for the body model only when it can change anything ──
 //
 // detectLoop() has its own requestAnimationFrame chain, which decouples its
 // RATE from the renderer's but not its COST: both run on the one main thread
 // and share one frame budget, so every millisecond MediaPipe spends inferring
-// is a millisecond the duel does not get to draw in. A second model was enough
-// to push the quality governor down to `low` on a real machine, and a duel that
-// drops frames while you are drawing a bow is worse than one whose elbow
-// occasionally clips its own ribs.
+// is a millisecond the duel does not get to draw in. Running the body on every
+// detection was enough to push the quality governor down to `low`.
 //
-// Turn it on to get tracked elbows back; the arm falls back to a fixed bend
-// hint without it, which is what it always used before. Thinning it with
-// POSE_EVERY was not enough on its own -- the cost is in loading and running a
-// second model at all, not in how often.
-const TRACK_BODY = false;
-const POSE_EVERY = 4;
+// Thinning the cadence alone did not fix it. What does is noticing that the
+// body is read for exactly one purpose -- which way an elbow is bent -- and
+// that an elbow only matters while an arm is up. With no hand in frame there is
+// no arm being solved, so the second model has nothing to contribute and is
+// simply not run. Standing, walking and watching now cost what they always did.
+const TRACK_BODY = true;
+const POSE_EVERY = 3;
 
 let video = null;
 let landmarker = null;
@@ -264,7 +263,7 @@ function detectLoop() {
     }
     // Separately try/caught: a body that fails must not cost us the hands,
     // which are what the whole game is actually played with.
-    if (poseLandmarker && detections % POSE_EVERY === 0) {
+    if (poseLandmarker && frame.tracked && detections % POSE_EVERY === 0) {
       try {
         applyPose(poseLandmarker.detectForVideo(video, now));
       } catch {
@@ -308,6 +307,9 @@ function applyResult(result) {
       frame.tracked = false;
       frame.stale = false;
       frame.hands = EMPTY_HANDS;
+      // The body is only read while an arm is up, so let it go with the hand.
+      // Holding it would leave the elbow bent the way it was when the hand left.
+      frame.pose = null;
       tipX.reset();
       tipY.reset();
     } else {

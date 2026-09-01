@@ -920,6 +920,11 @@ const CAST_FOV = 62;
 // arm. The bow arm was never the problem, and the bow arm is the only one this
 // shot contains -- which is why you see a left hand and no right one.
 const EYE_AHEAD = 0.30;    // in front of the face, so the helm falls behind the lens
+// Held first person sits this much above the head bone. The bow and fist
+// stances look down their own arm and want the true eye line; standing and
+// casting, that same height reads as stooping, because there is no raised arm
+// filling the lower frame to say how tall you are.
+const EYE_LIFT = 0.34;
 const BOW_EYE_FOV = 45;    // where the closing-in settles
 // Fists ride the same journey to the same eye and stop at a wider lens. 45 is
 // the angle that just fits a bow into frame; nothing has to fit into a punch,
@@ -1013,6 +1018,7 @@ function updateCamera(dt) {
   // surrounds the lens and you look at the inside of your own mask; 0.30 ahead
   // puts it behind the near plane, where back-face culling disposes of it.
   _bowPos.copy(_bowEye).addScaledVector(_flat, EYE_AHEAD);
+  if (plainEye) _bowPos.y += EYE_LIFT * smooth(bowFraming);
 
   // Body, then arm, then bow, then downrange. The last beat matters as much as
   // the others: a camera that settles pointing AT your own bow hand is a camera
@@ -1034,6 +1040,8 @@ function updateCamera(dt) {
       .lerp(_downrange.copy(_bowPos).addScaledVector(_flat, 12), stage(bowFraming, BEAT_DOWNRANGE));
   }
 
+  const moved = smooth(bowFraming);
+
   // A slightly wider lens while casting, to keep the whole drawing arc in frame
   // from this much closer camera.
   const fov = lerp(lerp(DUEL_FOV, CAST_FOV, castFraming), eyeFov, stage(bowFraming, BEAT_ZOOM));
@@ -1042,13 +1050,29 @@ function updateCamera(dt) {
     camera.updateProjectionMatrix();
   }
 
+  // ── The hand has to be unprojected through the lens you are actually using ──
+  //
+  // handTarget() puts the hand HAND_DEPTH in front of castCamera, and that
+  // camera sits CAST_BACK behind the shoulder. In the over-shoulder view those
+  // cancel and the hand lands in front of you. In first person they do not: the
+  // lens moves up to the eye and EYE_AHEAD further forward again, while the
+  // hand stays parked off the old camera -- about half a metre in front of the
+  // shoulder, which is BEHIND the eye. The hand was being placed behind the
+  // lens, so raising it showed nothing.
+  //
+  // Following the real view fixes the elbow hint and the palm frame with it,
+  // since both are unprojected through this same camera.
   castCamera.aspect = camera.aspect;
-  castCamera.position.copy(_castPos);
+  if (plainEye) {
+    castCamera.position.lerpVectors(_castPos, _bowPos, moved);
+    _castLook.lerp(_downrange, moved);
+  } else {
+    castCamera.position.copy(_castPos);
+  }
   castCamera.lookAt(_castLook);
   castCamera.updateProjectionMatrix();
   castCamera.updateMatrixWorld(true);
 
-  const moved = smooth(bowFraming);
   _cameraPosition.lerpVectors(_chasePos, _castPos, castFraming).lerp(_bowPos, moved);
   _look.lerpVectors(_chaseLook, _castLook, castFraming).lerp(_bowLook, moved);
   // Snappier the further into the casting view we are; the duelling chase camera
