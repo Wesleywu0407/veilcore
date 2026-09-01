@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "veilcore",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/duel-server.mjs"],
+      "port": 5173
+    },
+    {
+      "name": "veilcore-preview",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/duel-server.mjs", "--port", "5199"],
+      "port": 5199
+    }
+  ]
+}
