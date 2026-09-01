@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { buildArena, buildEnvironment } from './arena/scene.js';
 import { DUEL } from './arena/config.js';
 import { createDuelist } from './arena/duelist.js';
-import { fingerCurls } from './spell-room/fingers.js';
+import { fingerCurls, palmBasis } from './spell-room/fingers.js';
 import { createOpponentController } from './arena/opponent.js';
 import { createSpellSystem } from './arena/spell-system.js';
 import { createPerformanceGovernor } from './arena/performance.js';
@@ -1602,6 +1602,29 @@ function elbowTarget(arm) {
 // A hand that is not being tracked opens rather than freezing, because a hand
 // held shut by a dropout is a hand the player cannot see themselves controlling.
 const _curls = { left: {}, right: {} };
+const _palmAlong = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+const _palmAcross = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+const _camRight = new THREE.Vector3();
+const _camUp = new THREE.Vector3();
+const _camForward = new THREE.Vector3();
+
+/**
+ * A direction in the tracker's space, pointed the same way in the world.
+ *
+ * The landmarks live in the picture: x across it, y DOWN it, z into it. Those
+ * are the camera's own axes, so the direction is just that triple read against
+ * the camera's basis -- and it goes through the same castCamera the hand target
+ * is unprojected with, or the palm would face somewhere the hand is not.
+ */
+function trackedDirection(v, out) {
+  castCamera.matrixWorld.extractBasis(_camRight, _camUp, _camForward);
+  // extractBasis gives the camera's +Z, which points BEHIND a three.js camera.
+  return out.set(0, 0, 0)
+    .addScaledVector(_camRight, v.x)
+    .addScaledVector(_camUp, -v.y)
+    .addScaledVector(_camForward, -v.z)
+    .normalize();
+}
 
 function driveFingers(frame) {
   if (!playerAvatar.hasFingers) return;
@@ -1612,6 +1635,21 @@ function driveFingers(frame) {
       // it null. It is the drawing hand, which is the right one.
       ?? (hands.length === 1 && hands[0].side === null && side === 'right' ? hands[0] : null);
     playerAvatar.fingers(side, hand ? fingerCurls(hand.landmarks, _curls[side]) : null);
+
+    // Only two directions are carried across, never the palm normal: the
+    // tracker's space is mirrored and the duelist's is not, so a normal would
+    // arrive pointing out of the wrong side of the hand. The duelist crosses
+    // these two itself, in its own space, where the handedness is known.
+    const basis = hand ? palmBasis(hand.landmarks) : null;
+    if (basis) {
+      playerAvatar.palm(
+        side,
+        trackedDirection(basis.along, _palmAlong[side]),
+        trackedDirection(basis.across, _palmAcross[side]),
+      );
+    } else {
+      playerAvatar.palm(side, null, null);
+    }
   }
 }
 

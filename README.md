@@ -305,7 +305,7 @@ the game. None of these effects casts a shadow.
 ## Tests
 
 ```bash
-npm run test         # 103 tests, no camera needed
+npm run test         # 110 tests, no camera needed
 npm run runes        # how far apart the rune shapes sit
 npm run assets       # triangles, textures, download size and VRAM per GLB
 ```

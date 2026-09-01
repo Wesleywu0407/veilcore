@@ -1,8 +1,12 @@
-// ─── Spell Room — How closed each finger is ───────────────────────────────────
+// ─── Spell Room — What the hand is doing ──────────────────────────────────────
 //
-// Turns the 21 tracked hand landmarks into one number per finger: 0 straight,
-// 1 closed. Plain maths on plain objects, so it is tested against synthetic
-// hands rather than by holding a real one up to a camera.
+// Two readings off the same 21 landmarks: how closed each finger is, and which
+// way the palm is facing. Plain maths on plain objects, so both are tested
+// against synthetic hands rather than by holding a real one up to a camera.
+//
+// Everything here stays in MediaPipe's own space -- x right, y DOWN, z depth,
+// all already un-mirrored by tracker.js. Getting from there to the world is the
+// caller's job, because only the caller owns the camera.
 //
 // ── Why a chord-over-arc ratio and not an angle ──
 //
@@ -92,4 +96,68 @@ export function fingerCurls(landmarks, out = {}) {
     out[name] = clamp01((range.straight - ratio) / (range.straight - range.closed));
   }
   return out;
+}
+
+
+// ─── Which way the palm is facing ─────────────────────────────────────────────
+//
+// The wrist's POSITION has always been tracked, and now so is each finger, but
+// between them sat the thing that actually makes a hand look like yours: its
+// rotation. A hand in the right place with the right fingers still reads as
+// somebody else's if the palm is facing the wrong way.
+//
+// Three knuckles and the wrist are enough to pin it down, and they are the four
+// landmarks that move least when the fingers curl -- so the palm does not swing
+// about as you close your hand, which is exactly the coupling to avoid.
+
+const PALM = Object.freeze({ WRIST: 0, INDEX_MCP: 5, MIDDLE_MCP: 9, PINKY_MCP: 17 });
+
+function sub(a, b) {
+  return { x: a.x - b.x, y: a.y - b.y, z: (a.z ?? 0) - (b.z ?? 0) };
+}
+
+function cross(a, b) {
+  return {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  };
+}
+
+function norm(v) {
+  const length = Math.hypot(v.x, v.y, v.z);
+  return length > 1e-9 ? { x: v.x / length, y: v.y / length, z: v.z / length } : null;
+}
+
+/**
+ * An orthonormal frame for the palm:
+ *
+ *   along   wrist toward the middle knuckle -- the way the fingers point
+ *   across  pinky knuckle toward the index knuckle
+ *   normal  out of the back of the hand
+ *
+ * Built with Gram-Schmidt from `along` and `across`, so the frame stays square
+ * even though a real hand's knuckle line is never exactly perpendicular to it.
+ * Returns null for a hand too flat or too small to give a direction, which is
+ * what a bad frame of tracking looks like -- callers should hold their previous
+ * frame rather than snapping the wrist to some default.
+ */
+export function palmBasis(landmarks) {
+  if (!landmarks) return null;
+  const wrist = landmarks[PALM.WRIST];
+  const index = landmarks[PALM.INDEX_MCP];
+  const middle = landmarks[PALM.MIDDLE_MCP];
+  const pinky = landmarks[PALM.PINKY_MCP];
+  if (!wrist || !index || !middle || !pinky) return null;
+
+  const along = norm(sub(middle, wrist));
+  const spread = norm(sub(index, pinky));
+  if (!along || !spread) return null;
+
+  const normal = norm(cross(along, spread));
+  if (!normal) return null;                 // knuckles collinear with the wrist
+  const across = norm(cross(normal, along));
+  if (!across) return null;
+
+  return { along, across, normal };
 }

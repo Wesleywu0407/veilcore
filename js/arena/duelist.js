@@ -51,6 +51,11 @@ const FINGER_JOINT = [0.9, 0.75, 0.6];   // knuckle bends most, last joint least
 // reads fine; a hard knuckled fist does not. See scripts/rig-fingers/README.md.
 const FINGER_MAX_CURL = 0.55;
 
+// How fast the wrist follows the player's palm. Slower than the fingers on
+// purpose: a wrist that snaps reads as a glitch, where a finger that snaps just
+// reads as a fast hand.
+const PALM_TRACK = 11;
+
 // ── The draw ─────────────────────────────────────────────────────────────────
 //
 // A drawn bow is a pose that has to track `draw` continuously, which is why it
@@ -244,6 +249,62 @@ function collectFingerChains(model) {
   return found ? chains : null;
 }
 
+/**
+ * The wrist bone and the fixed twist between it and the palm it carries.
+ *
+ * The hand bone's own axes mean nothing anatomical -- glTF gave the terminal
+ * hand a filler tail pointing 25 units into the distance. So the palm's frame
+ * is taken from the finger bones instead, which were placed from the mesh:
+ * along the middle finger, across from pinky to index. Whatever rotation sits
+ * between the bone and that frame at rest is constant, so it can be measured
+ * once and used to turn a wanted palm direction back into a bone rotation.
+ */
+function collectPalmRig(model) {
+  const rig = {};
+  const along = new THREE.Vector3();
+  const across = new THREE.Vector3();
+  const normal = new THREE.Vector3();
+  const hand = new THREE.Vector3();
+  const point = new THREE.Vector3();
+  model.updateMatrixWorld(true);
+  for (const side of ['Left', 'Right']) {
+    const bone = model.getObjectByName(`${side}Hand`);
+    const middle = model.getObjectByName(`${side}HandMiddle1`);
+    const index = model.getObjectByName(`${side}HandIndex1`);
+    const pinky = model.getObjectByName(`${side}HandPinky1`);
+    if (!bone || !middle || !index || !pinky) continue;
+
+    bone.getWorldPosition(hand);
+    along.copy(middle.getWorldPosition(point)).sub(hand).normalize();
+    across.copy(index.getWorldPosition(point))
+      .sub(pinky.getWorldPosition(new THREE.Vector3())).normalize();
+    // Right-handed, or makeBasis below builds a reflection rather than a
+    // rotation and the quaternion comes out of it meaningless: the triple has
+    // to satisfy across x along == normal, which needs normal = across x along.
+    normal.copy(across).cross(along).normalize();
+    across.copy(along).cross(normal).normalize();
+
+    const frame = new THREE.Quaternion().setFromRotationMatrix(
+      new THREE.Matrix4().makeBasis(across, along, normal),
+    );
+    const boneWorld = bone.getWorldQuaternion(new THREE.Quaternion());
+    rig[side.toLowerCase()] = {
+      bone,
+      // bone -> palm frame, constant for the life of the rig
+      offset: boneWorld.clone().invert().multiply(frame),
+      rest: bone.quaternion.clone(),
+      // Our own eased rotation, held across frames. It cannot be read back off
+      // the bone: the idle clip writes every one of the original 24 bones on
+      // every frame, so easing from whatever is on the bone starts again from
+      // the clip's pose each time and the wrist never arrives -- it just sits
+      // wherever one step of the ease can reach.
+      live: bone.quaternion.clone(),
+      holding: false,
+    };
+  }
+  return Object.keys(rig).length ? rig : null;
+}
+
 /** The Meshy focus that follows the solved casting wrist. */
 function buildCastFocus(colour) {
   const group = new THREE.Group();
@@ -381,6 +442,17 @@ export function createDuelist(scene, {
     }
   }
   const _fingerAxis = new THREE.Vector3(1, 0, 0);
+  // Per hand: the wrist bone, and the fixed rotation between that bone and the
+  // anatomical frame of the palm hanging off it.
+  let palmRig = null;
+  const palmTarget = { left: null, right: null };
+  const _palmM = new THREE.Matrix4();
+  const _palmQ = new THREE.Quaternion();
+  const _palmWant = new THREE.Quaternion();
+  const _palmParent = new THREE.Quaternion();
+  const _pAlong = new THREE.Vector3();
+  const _pAcross = new THREE.Vector3();
+  const _pNormal = new THREE.Vector3();
   const _sparkPos = new THREE.Vector3();
   const _reachLocal = new THREE.Vector3();
   const _bowHand = new THREE.Vector3();
@@ -460,6 +532,22 @@ export function createDuelist(scene, {
     },
     attachCastFocus(model) { castFocus.attach(model); },
     get hasFingers() { return fingerChains !== null; },
+    get hasPalm() { return palmRig !== null; },
+    /**
+     * Which way the player's palm is facing, as two WORLD directions: `along`
+     * runs wrist to middle knuckle, `across` runs pinky knuckle to index.
+     *
+     * Only two, because the third is a cross product and deriving it here --
+     * in world space, with one handedness -- is what stops the palm coming out
+     * inside-out. The tracker works in a mirrored image space whose handedness
+     * is the opposite of the scene's, so a normal carried across that boundary
+     * would arrive backwards. Directions survive the trip; a cross product does
+     * not. Pass null to hand the wrist back to the animation.
+     */
+    palm(side, along, across) {
+      palmTarget[side === 'left' ? 'left' : 'right'] =
+        along && across ? { along, across } : null;
+    },
     /**
      * How closed each finger is, 0 open and 1 shut, for one hand.
      *
@@ -648,6 +736,7 @@ export function createDuelist(scene, {
       imported = model;
       imported.name = `${name} Meshy model`;
       fingerChains = collectFingerChains(imported);
+      palmRig = collectPalmRig(imported);
       imported.traverse(object => {
         if (!object.isMesh) return;
         object.castShadow = castShadow;
@@ -926,6 +1015,51 @@ export function createDuelist(scene, {
             castFocus.mount.rotation.y += dt * (1.1 + chargeGlow * 4.2);
             castFocus.material.opacity = 0.65 + chargeGlow * 0.35;
           }
+        }
+      }
+      // The wrist, after the fingers and after the arm IK has put the hand
+      // where it goes: this overrides only the hand bone's rotation, so the arm
+      // still decides where the hand IS and the palm decides which way it looks.
+      if (palmRig) {
+        root.updateMatrixWorld(true);
+        for (const side of ['left', 'right']) {
+          const rig = palmRig[side];
+          if (!rig) continue;
+          const want = palmTarget[side];
+          if (!want) {
+            // Hand the wrist back: the clip already wrote it this frame, so
+            // leaving it alone is the handover, and remembering where it is
+            // stops the next acquisition snapping.
+            rig.live.copy(rig.bone.quaternion);
+            rig.holding = false;
+            continue;
+          }
+          _pAlong.copy(want.along).normalize();
+          _pAcross.copy(want.across);
+          // Square the frame up: a real knuckle line is never exactly
+          // perpendicular to the fingers, and makeBasis on a skewed pair gives
+          // a matrix that is not a rotation at all.
+          // Same right-handed construction as the rest frame, or the delta
+          // between the two is not a rotation at all.
+          _pNormal.copy(_pAcross).cross(_pAlong);
+          if (_pNormal.lengthSq() < 1e-8) continue;
+          _pNormal.normalize();
+          _pAcross.copy(_pAlong).cross(_pNormal).normalize();
+          _palmM.makeBasis(_pAcross, _pAlong, _pNormal);
+          _palmQ.setFromRotationMatrix(_palmM);
+          // Wanted palm frame -> wanted bone world rotation -> local.
+          _palmWant.copy(_palmQ).multiply(rig.offset.clone().invert());
+          rig.bone.parent.getWorldQuaternion(_palmParent);
+          _palmWant.premultiply(_palmParent.invert());
+          // First frame of a hold snaps, so the wrist does not swing in from
+          // wherever the clip happened to have it.
+          if (!rig.holding) {
+            rig.live.copy(_palmWant);
+            rig.holding = true;
+          } else {
+            rig.live.slerp(_palmWant, Math.min(1, dt * PALM_TRACK));
+          }
+          rig.bone.quaternion.copy(rig.live);
         }
       }
     },

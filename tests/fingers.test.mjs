@@ -122,3 +122,82 @@ test('a hand collapsed to a point does not divide by zero', () => {
   const out = fingerCurls(flat, {});
   for (const name of FINGERS) assert.ok(Number.isFinite(out[name]));
 });
+
+// ─── The palm's own frame ─────────────────────────────────────────────────────
+
+import { palmBasis } from '../js/spell-room/fingers.js';
+
+const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+const len = v => Math.hypot(v.x, v.y, v.z);
+
+/** A flat hand, fingers along +y, knuckles along +x, so the palm faces -z. */
+function flatHand() {
+  const p = new Array(21).fill(null).map(() => ({ x: 0, y: 0, z: 0 }));
+  p[0] = { x: 0, y: 0, z: 0 };        // wrist
+  p[5] = { x: 0.03, y: 0.08, z: 0 };  // index knuckle
+  p[9] = { x: 0.00, y: 0.09, z: 0 };  // middle knuckle
+  p[17] = { x: -0.03, y: 0.07, z: 0 }; // pinky knuckle
+  return p;
+}
+
+test('the palm frame is orthonormal', () => {
+  const b = palmBasis(flatHand());
+  for (const v of [b.along, b.across, b.normal]) {
+    assert.ok(Math.abs(len(v) - 1) < 1e-9, `not unit length: ${len(v)}`);
+  }
+  assert.ok(Math.abs(dot(b.along, b.across)) < 1e-9);
+  assert.ok(Math.abs(dot(b.along, b.normal)) < 1e-9);
+  assert.ok(Math.abs(dot(b.across, b.normal)) < 1e-9);
+});
+
+test('along points from the wrist toward the knuckles', () => {
+  const b = palmBasis(flatHand());
+  assert.ok(b.along.y > 0.9, `expected mostly +y, got ${JSON.stringify(b.along)}`);
+});
+
+test('across runs pinky to index', () => {
+  const b = palmBasis(flatHand());
+  assert.ok(b.across.x > 0.9, `expected mostly +x, got ${JSON.stringify(b.across)}`);
+});
+
+test('turning the hand over flips the palm normal', () => {
+  const up = palmBasis(flatHand());
+  const over = flatHand();
+  // Mirror the knuckle line: the same hand, rolled 180 degrees.
+  over[5].x = -over[5].x;
+  over[17].x = -over[17].x;
+  const flipped = palmBasis(over);
+  assert.ok(dot(up.normal, flipped.normal) < -0.9,
+    `normals should oppose, got ${dot(up.normal, flipped.normal)}`);
+});
+
+test('rolling the wrist rotates the frame without moving along', () => {
+  const flat = palmBasis(flatHand());
+  const rolled = flatHand();
+  // Swing the knuckle line out of the xy plane: a wrist roll.
+  rolled[5] = { x: 0.02, y: 0.08, z: -0.02 };
+  rolled[17] = { x: -0.02, y: 0.07, z: 0.02 };
+  const b = palmBasis(rolled);
+  assert.ok(dot(flat.along, b.along) > 0.99, 'the fingers still point the same way');
+  assert.ok(dot(flat.normal, b.normal) < 0.95, 'but the palm has turned');
+});
+
+test('the palm frame does not swing about when the fingers close', () => {
+  // The four landmarks it uses are the wrist and three knuckles, none of which
+  // a curl moves much. If this ever fails, closing your hand will also spin it.
+  const open = palmBasis(hand(0));
+  const shut = palmBasis(hand(1));
+  assert.ok(dot(open.normal, shut.normal) > 0.999, `normal drifted: ${dot(open.normal, shut.normal)}`);
+  assert.ok(dot(open.along, shut.along) > 0.999, `along drifted: ${dot(open.along, shut.along)}`);
+});
+
+test('a hand with no usable spread reports nothing rather than a wrong frame', () => {
+  assert.equal(palmBasis(null), null);
+  const collapsed = flatHand();
+  collapsed[5] = { x: 0, y: 0.08, z: 0 };
+  collapsed[17] = { x: 0, y: 0.08, z: 0 };   // knuckles on top of each other
+  assert.equal(palmBasis(collapsed), null);
+  const missing = flatHand();
+  missing[9] = null;
+  assert.equal(palmBasis(missing), null);
+});
