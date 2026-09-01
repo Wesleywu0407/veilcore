@@ -83,10 +83,14 @@ export function buildArena(scene) {
     opponent: buildCore(scene, new THREE.Vector3(-8, 0, -18), OPPONENT_VIOLET),
   };
   const spills = [];
-  const spillGeometry = new THREE.OctahedronGeometry(0.22, 0);
+  let spillPrototype = null;
+  // A pickup you can walk into but cannot see is worse than a plain one, so the
+  // shard keeps a fallback the cathedral deliberately does not have. It is only
+  // built if the Meshy shard never arrives.
+  let fallbackSpillGeometry = null;
   const spillMaterials = {
-    player: new THREE.MeshBasicMaterial({ color: PLAYER_GOLD }),
-    opponent: new THREE.MeshBasicMaterial({ color: OPPONENT_VIOLET }),
+    player: new THREE.MeshBasicMaterial({ color: PLAYER_GOLD, toneMapped: false }),
+    opponent: new THREE.MeshBasicMaterial({ color: OPPONENT_VIOLET, toneMapped: false }),
   };
   let lastTime = 0;
 
@@ -115,6 +119,41 @@ export function buildArena(scene) {
     radius: ARENA_RADIUS,
     well,
     cores,
+    attachCoreVisual(model) {
+      model.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(model);
+      const centre = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const scale = 1.75 / Math.max(size.y, 0.001);
+
+      for (const core of Object.values(cores)) {
+        const visual = model.clone(true);
+        visual.name = 'Meshy Veil Core';
+        visual.scale.setScalar(scale);
+        visual.position.set(-centre.x * scale, -centre.y * scale, -centre.z * scale);
+        visual.traverse(object => {
+          if (!object.isMesh) return;
+          object.castShadow = false;
+          object.receiveShadow = false;
+          object.material = core.material;
+        });
+        core.crystal.clear();
+        core.crystal.add(visual);
+      }
+    },
+    attachSpillVisual(model) {
+      model.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(model);
+      const centre = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const scale = 0.52 / Math.max(size.x, size.y, size.z, 0.001);
+      const visual = model.clone(true);
+      visual.name = 'Meshy mana shard';
+      visual.scale.setScalar(scale);
+      visual.position.set(-centre.x * scale, -centre.y * scale, -centre.z * scale);
+      spillPrototype = new THREE.Group();
+      spillPrototype.add(visual);
+    },
     attachShell(model) {
       shellRoot.clear();
       model.updateMatrixWorld(true);
@@ -165,7 +204,13 @@ export function buildArena(scene) {
       const count = 4;
       for (let i = 0; i < count; i++) {
         const angle = i * Math.PI * 0.5 + (side === 'player' ? 0.35 : -0.35);
-        const mesh = new THREE.Mesh(spillGeometry, spillMaterials[side]);
+        const mesh = spillPrototype?.clone(true) ?? fallbackSpill(side);
+        mesh.traverse(object => {
+          if (!object.isMesh) return;
+          object.castShadow = false;
+          object.receiveShadow = false;
+          object.material = spillMaterials[side];
+        });
         mesh.position.set(origin.x + Math.sin(angle) * 2.1, 0.65, origin.z + Math.cos(angle) * 2.1);
         scene.add(mesh);
         spills.push({ mesh, value: amount / count, born: lastTime, phase: i * 1.7 });
@@ -192,12 +237,9 @@ export function buildArena(scene) {
       lastTime = t;
       cores.player.crystal.rotation.y = t * 0.55;
       cores.opponent.crystal.rotation.y = -t * 0.55;
-      cores.player.cage.rotation.y = t * 0.24;
-      cores.opponent.cage.rotation.y = -t * 0.24;
       for (const side of ['player', 'opponent']) {
         const disabled = match.cores[side].disabledFor > 0;
-        cores[side].crystal.material.emissiveIntensity = disabled ? 0.08 : 2.2;
-        cores[side].crystal.material.opacity = disabled ? 0.28 : 0.92;
+        cores[side].material.opacity = disabled ? 0.28 : 0.94;
       }
       for (let i = spills.length - 1; i >= 0; i--) {
         const pickup = spills[i];
@@ -208,34 +250,32 @@ export function buildArena(scene) {
         spills.splice(i, 1);
       }
     },
+    dispose() {
+      for (const pickup of spills) pickup.mesh.removeFromParent();
+      for (const core of Object.values(cores)) core.material.dispose();
+      for (const material of Object.values(spillMaterials)) material.dispose();
+      fallbackSpillGeometry?.dispose();
+    },
   };
+
+  function fallbackSpill(side) {
+    fallbackSpillGeometry ??= new THREE.OctahedronGeometry(0.22, 0);
+    return new THREE.Mesh(fallbackSpillGeometry, spillMaterials[side]);
+  }
 }
 
 function buildCore(scene, position, colour) {
   const group = new THREE.Group();
   group.position.copy(position);
-  const crystal = new THREE.Mesh(
-    new THREE.OctahedronGeometry(0.82, 0),
-    new THREE.MeshStandardMaterial({
-      color: colour, emissive: colour, emissiveIntensity: 2.2,
-      transparent: true, opacity: 0.92, roughness: 0.18,
-    }),
-  );
+  const material = new THREE.MeshBasicMaterial({
+    color: colour, transparent: true, opacity: 0.94, toneMapped: false,
+  });
+  const crystal = new THREE.Group();
+  crystal.name = 'Veil Core mount';
   crystal.position.y = 1.8;
   group.add(crystal);
-  const cage = new THREE.Group();
-  for (let i = 0; i < 3; i++) {
-    const orbit = new THREE.Mesh(
-      new THREE.TorusGeometry(1.12, 0.025, 5, 36),
-      new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.55 }),
-    );
-    orbit.rotation.set(i * 0.9, i * 0.7, i * 1.1);
-    orbit.position.y = 1.8;
-    cage.add(orbit);
-  }
-  group.add(cage);
   scene.add(group);
-  return { group, crystal, cage, position: group.position };
+  return { group, crystal, material, position: group.position };
 }
 
 function buildAcademyColliders(colliders) {

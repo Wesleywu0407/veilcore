@@ -150,36 +150,50 @@ function withoutArms(clip, which) {
  * internals; movement, hit detection, team colour, and animation calls stay
  * behind the same object.
  */
-/**
- * The light the duelist casts with. The concept art has no staff and no wand --
- * the magic forms at the fingertips -- so an empty hand tracing a rune is the
- * one thing the character must not look like. Additive and depth-write off so
- * it reads as light rather than as a plastic bead stuck to the glove.
- */
-function buildCastSpark(colour) {
+/** The Meshy focus that follows the solved casting wrist. */
+function buildCastFocus(colour) {
   const group = new THREE.Group();
-  const glow = () => new THREE.MeshBasicMaterial({
-    color: colour, transparent: true, opacity: 0.8,
-    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+  const mount = new THREE.Group();
+  const material = new THREE.MeshBasicMaterial({
+    color: colour,
+    transparent: true,
+    opacity: 0.9,
+    toneMapped: false,
   });
-  const core = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), glow());
-  group.add(core);
-
-  const sigils = new THREE.Group();
-  const shard = new THREE.PlaneGeometry(0.055, 0.055);
-  for (let i = 0; i < 6; i++) {
-    const angle = (i / 6) * Math.PI * 2;
-    const sigil = new THREE.Mesh(shard, glow());
-    sigil.position.set(Math.cos(angle) * 0.19, Math.sin(angle) * 0.19, 0);
-    sigil.rotation.z = angle;
-    sigils.add(sigil);
-  }
-  group.add(sigils);
+  group.add(mount);
   group.visible = false;
-  return { group, core, sigils };
+  return {
+    group,
+    mount,
+    material,
+    ready: false,
+    attach(model) {
+      model.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(model);
+      const centre = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const scale = 0.42 / Math.max(size.x, size.y, size.z, 0.001);
+      model.name = 'Meshy hand focus';
+      model.scale.setScalar(scale);
+      model.position.set(-centre.x * scale, -centre.y * scale, -centre.z * scale);
+      model.traverse(object => {
+        if (!object.isMesh) return;
+        object.castShadow = false;
+        object.receiveShadow = false;
+        object.material = material;
+      });
+      mount.clear();
+      mount.add(model);
+      this.ready = true;
+    },
+  };
 }
 
-export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {}) {
+export function createDuelist(scene, {
+  colour = 0xffd98a,
+  name = 'Duelist',
+  castShadow = true,
+} = {}) {
   const root = new THREE.Group();
   root.name = name;
 
@@ -194,60 +208,62 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
   const hips = new THREE.Group();
   hips.position.y = 1.75;
   root.add(hips);
+  let proxyBuilt = false;
+  function buildProxy() {
+    if (proxyBuilt) return;
+    proxyBuilt = true;
 
-  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.65, 1.45, 10), cloth);
-  torso.position.y = 0.55;
-  hips.add(torso);
+    const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.65, 1.45, 10), cloth);
+    torso.position.y = 0.55;
+    hips.add(torso);
 
-  const chest = new THREE.Mesh(new THREE.OctahedronGeometry(0.16, 0), team);
-  chest.position.set(0, 0.64, 0.51);
-  hips.add(chest);
+    const chest = new THREE.Mesh(new THREE.OctahedronGeometry(0.16, 0), team);
+    chest.position.set(0, 0.64, 0.51);
+    hips.add(chest);
 
-  const coat = new THREE.Mesh(new THREE.CylinderGeometry(0.64, 0.9, 1.22, 8, 1, true), cloth);
-  coat.position.y = -0.45;
-  hips.add(coat);
+    const coat = new THREE.Mesh(new THREE.CylinderGeometry(0.64, 0.9, 1.22, 8, 1, true), cloth);
+    coat.position.y = -0.45;
+    hips.add(coat);
 
-  const shoulderGeometry = new THREE.SphereGeometry(0.32, 10, 7, 0, Math.PI * 2, 0, Math.PI / 2);
-  for (const side of [-1, 1]) {
-    const shoulder = new THREE.Mesh(shoulderGeometry, armour);
-    shoulder.position.set(side * 0.68, 0.97, 0);
-    shoulder.rotation.z = side * -0.28;
-    hips.add(shoulder);
+    const shoulderGeometry = new THREE.SphereGeometry(0.32, 10, 7, 0, Math.PI * 2, 0, Math.PI / 2);
+    for (const side of [-1, 1]) {
+      const shoulder = new THREE.Mesh(shoulderGeometry, armour);
+      shoulder.position.set(side * 0.68, 0.97, 0);
+      shoulder.rotation.z = side * -0.28;
+      hips.add(shoulder);
+    }
+
+    const limbGeometry = new THREE.CapsuleGeometry(0.14, 0.92, 4, 8);
+    for (const side of [-1, 1]) {
+      const arm = new THREE.Mesh(limbGeometry, cloth);
+      arm.position.set(side * 0.68, 0.25, 0);
+      arm.rotation.z = side * -0.08;
+      hips.add(arm);
+
+      const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 1.25, 4, 8), cloth);
+      leg.position.set(side * 0.28, -1.55, 0);
+      hips.add(leg);
+    }
+
+    const helm = new THREE.Mesh(new THREE.SphereGeometry(0.38, 16, 12), porcelain);
+    helm.scale.set(0.82, 1.08, 0.72);
+    helm.position.set(0, 1.7, 0);
+    hips.add(helm);
+
+    const eyeGeometry = new THREE.BoxGeometry(0.16, 0.035, 0.025);
+    for (const side of [-1, 1]) {
+      const eye = new THREE.Mesh(eyeGeometry, team);
+      eye.position.set(side * 0.12, 1.73, 0.275);
+      eye.rotation.z = side * -0.12;
+      hips.add(eye);
+    }
+
+    hips.traverse(object => {
+      if (!object.isMesh) return;
+      object.castShadow = castShadow;
+      object.receiveShadow = true;
+    });
   }
-
-  const limbGeometry = new THREE.CapsuleGeometry(0.14, 0.92, 4, 8);
-  for (const side of [-1, 1]) {
-    const arm = new THREE.Mesh(limbGeometry, cloth);
-    arm.position.set(side * 0.68, 0.25, 0);
-    arm.rotation.z = side * -0.08;
-    hips.add(arm);
-
-    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 1.25, 4, 8), cloth);
-    leg.position.set(side * 0.28, -1.55, 0);
-    hips.add(leg);
-  }
-
-  // The sealed porcelain helm is intentionally a complete shell, not a face
-  // pasted onto a placeholder head. This preserves the decision made during
-  // Meshy review and gives the proxy the same read from behind.
-  const helm = new THREE.Mesh(new THREE.SphereGeometry(0.38, 16, 12), porcelain);
-  helm.scale.set(0.82, 1.08, 0.72);
-  helm.position.set(0, 1.7, 0);
-  hips.add(helm);
-
-  const eyeGeometry = new THREE.BoxGeometry(0.16, 0.035, 0.025);
-  for (const side of [-1, 1]) {
-    const eye = new THREE.Mesh(eyeGeometry, team);
-    eye.position.set(side * 0.12, 1.73, 0.275);
-    eye.rotation.z = side * -0.12;
-    hips.add(eye);
-  }
-
-  root.traverse(object => {
-    if (!object.isMesh) return;
-    object.castShadow = true;
-    object.receiveShadow = true;
-  });
   scene.add(root);
 
   let stride = 0;
@@ -255,7 +271,8 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
   let targetYaw = 0;
   let armIK = null;        // the right arm — the rune hand, and the bow's string hand
   let leftIK = null;       // the left arm, only ever used by the draw
-  let castSpark = null;
+  const castFocus = buildCastFocus(colour);
+  root.add(castFocus.group);
   let chargeGlow = 0;
   let castSparkEnabled = true;
   const _sparkPos = new THREE.Vector3();
@@ -323,6 +340,11 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
     bowAnchor,
     radius: 0.75,
     height: 3.45,
+    useFallback() {
+      buildProxy();
+      hips.visible = true;
+    },
+    attachCastFocus(model) { castFocus.attach(model); },
     setPosition(position) { root.position.copy(position); },
     face(direction) {
       // Record the intent only. Assigning rotation.y here teleported the duelist
@@ -484,7 +506,7 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
       imported.name = `${name} Meshy model`;
       imported.traverse(object => {
         if (!object.isMesh) return;
-        object.castShadow = true;
+        object.castShadow = castShadow;
         object.receiveShadow = true;
         if (object.material) object.material = object.material.clone();
       });
@@ -536,8 +558,6 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
         armIK.bones.wrist.getWorldPosition(wrist);
         armReach = shoulder.distanceTo(elbow) + elbow.distanceTo(wrist);
         shoulderLocal = root.worldToLocal(shoulder.clone());
-        castSpark = buildCastSpark(colour);
-        root.add(castSpark.group);
       }
       if (leftIK) {
         root.updateMatrixWorld(true);
@@ -545,13 +565,6 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
         leftIK.bones.shoulder.getWorldPosition(shoulder);
         leftShoulderLocal = root.worldToLocal(shoulder.clone());
       }
-
-      const accent = new THREE.Mesh(
-        new THREE.TorusGeometry(0.17, 0.025, 6, 24),
-        team,
-      );
-      accent.position.set(0, 2.45, 0.34);
-      root.add(accent);
 
       if (clips.length) {
         mixer = new THREE.AnimationMixer(imported);
@@ -714,22 +727,19 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
           root.updateMatrixWorld(true);
           armIK.solve(lastReach, reachWeight);
         }
-        if (castSpark) {
-          castSpark.group.visible = castSparkEnabled && reachWeight > 0.01;
-          if (castSpark.group.visible) {
+        if (castFocus.ready) {
+          castFocus.group.visible = castSparkEnabled && reachWeight > 0.01;
+          if (castFocus.group.visible) {
             // Positioned from the wrist's world transform each frame rather than
             // parented to the bone: the Armature carries a 0.01 scale, so a child
             // of the bone inherits it and every size here would be in whatever
             // units that rig happened to export in.
             root.updateMatrixWorld(true);
             armIK.bones.wrist.getWorldPosition(_sparkPos);
-            castSpark.group.position.copy(root.worldToLocal(_sparkPos));
-            castSpark.group.scale.setScalar((0.4 + chargeGlow * 1.3) * reachWeight);
-            castSpark.sigils.rotation.z += dt * (1.1 + chargeGlow * 5);
-            castSpark.core.material.opacity = (0.5 + chargeGlow * 0.5) * reachWeight;
-            for (const sigil of castSpark.sigils.children) {
-              sigil.material.opacity = (0.25 + chargeGlow * 0.75) * reachWeight;
-            }
+            castFocus.group.position.copy(root.worldToLocal(_sparkPos));
+            castFocus.group.scale.setScalar((0.55 + chargeGlow * 1.05) * reachWeight);
+            castFocus.mount.rotation.y += dt * (1.1 + chargeGlow * 4.2);
+            castFocus.material.opacity = 0.65 + chargeGlow * 0.35;
           }
         }
       }
@@ -738,7 +748,7 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
       root.traverse(object => {
         object.geometry?.dispose?.();
       });
-      for (const material of [cloth, armour, porcelain, team]) material.dispose();
+      for (const material of [cloth, armour, porcelain, team, castFocus.material]) material.dispose();
       root.removeFromParent();
     },
   };

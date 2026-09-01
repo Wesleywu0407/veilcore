@@ -19,6 +19,7 @@ import { createBoxingState } from './spell-room/boxing.js';
 import { createBowAim } from './spell-room/aim.js';
 import { createInputMode } from './spell-room/input-mode.js';
 import { createBowView, DUEL_BOW_MOUNT } from './arena/bow-view.js';
+import { loadGLB } from './arena/asset-library.js';
 import { raySphereDistance, rayVerticalCapsuleDistance } from './arena/shot.js';
 import { checkRoomServer, createRoomClient, mirrorArenaPosition, normaliseRoomCode } from './arena/room-client.js';
 
@@ -66,8 +67,8 @@ spells.loadAegis('assets/models/arena/aegis-barrier.glb')
 
 const playerPosition = new THREE.Vector3(0, 0, 14);
 const opponentPosition = new THREE.Vector3(0, 0, -12);
-const playerAvatar = createDuelist(scene, { colour: 0xffd98a, name: 'Lantern Duelist' });
-const opponentAvatar = createDuelist(scene, { colour: 0x9b87ff, name: 'Veil Rival' });
+const playerAvatar = createDuelist(scene, { colour: 0xffd98a, name: 'Lantern Duelist', castShadow: true });
+const opponentAvatar = createDuelist(scene, { colour: 0x9b87ff, name: 'Veil Rival', castShadow: false });
 const bowView = createBowView(playerAvatar.bowAnchor, DUEL_BOW_MOUNT);
 bowView.setVisible(false);
 playerAvatar.setPosition(playerPosition);
@@ -109,11 +110,8 @@ const CRYSTAL_OUT = 1.2;     // clear of the stone, so the orbit rings do not cl
 async function loadArenaShell() {
   const url = 'assets/models/arena/arena-shell.glb';
   try {
-    const response = await fetch(url, { method: 'HEAD' });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
-    const gltf = await new GLTFLoader().loadAsync(url);
-    arena.attachShell(gltf.scene);
+    const gltf = await loadGLB(url);
+    arena.attachShell(gltf.scene.clone(true));
     setStatus('Meshy cathedral loaded');
   } catch (error) {
     // There is intentionally no procedural arena fallback. A missing shell is
@@ -125,10 +123,7 @@ async function loadArenaShell() {
 async function loadArenaProps() {
   const url = 'assets/models/arena/core-shrine.glb';
   try {
-    const response = await fetch(url, { method: 'HEAD' });
-    if (!response.ok) return;
-    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
-    const gltf = await new GLTFLoader().loadAsync(url);
+    const gltf = await loadGLB(url);
     const box = new THREE.Box3().setFromObject(gltf.scene);
     const size = box.getSize(new THREE.Vector3());
     const scale = SHRINE_HEIGHT / Math.max(size.y, 0.001);
@@ -153,8 +148,6 @@ async function loadArenaProps() {
       // turned.
       const toCentre = new THREE.Vector3(-core.position.x, 0, -core.position.z).normalize();
       core.crystal.position.set(toCentre.x * CRYSTAL_OUT, CRYSTAL_Y, toCentre.z * CRYSTAL_OUT);
-      core.cage.position.copy(core.crystal.position);
-      for (const ring of core.cage.children) ring.position.set(0, 0, 0);
 
       // Stone you can walk through is worse than no stone at all.
       arena.colliders.push({ x: core.position.x, z: core.position.z, radius: 1.0 });
@@ -168,19 +161,15 @@ async function loadArenaProps() {
 async function loadMeshyDuelists() {
   const url = 'assets/models/arena/sealed-porcelain-duelist.glb';
   try {
-    const response = await fetch(url, { method: 'HEAD' });
-    if (!response.ok) return;
-    const [{ GLTFLoader }, { clone }] = await Promise.all([
-      import('three/addons/loaders/GLTFLoader.js'),
+    const [{ clone }, gltf, settled] = await Promise.all([
       import('three/addons/utils/SkeletonUtils.js'),
+      loadGLB(url),
+      Promise.allSettled(DUELIST_CLIPS.map(clip => loadGLB(clip))),
     ]);
-    const loader = new GLTFLoader();
-    const gltf = await loader.loadAsync(url);
     // These files are armature and curves only — no mesh, no textures — so they
     // cost kilobytes against the model's megabytes and are worth fetching in
     // parallel. One missing clip should cost that action alone, not the model,
     // hence allSettled rather than all.
-    const settled = await Promise.allSettled(DUELIST_CLIPS.map(clip => loader.loadAsync(clip)));
     const clips = gltf.animations.concat(
       settled.flatMap(result => (result.status === 'fulfilled' ? result.value.animations : [])),
     );
@@ -190,6 +179,8 @@ async function loadMeshyDuelists() {
     opponentAvatar.replaceVisual(clone(gltf.scene), clips);
     setStatus(`Meshy duelist loaded — ${clips.length} clips`);
   } catch (error) {
+    playerAvatar.useFallback();
+    opponentAvatar.useFallback();
     setStatus(`Meshy model fallback: ${error.message}`);
   }
 }
@@ -197,15 +188,32 @@ async function loadMeshyDuelists() {
 async function loadBow() {
   const url = 'assets/models/arena/bow.glb';
   try {
-    const response = await fetch(url, { method: 'HEAD' });
-    if (!response.ok) return;
-    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
-    const gltf = await new GLTFLoader().loadAsync(url);
+    const gltf = await loadGLB(url);
     bowView.attachLimbs(gltf.scene);
   } catch (error) {
     setStatus(`bow model fallback: ${error.message}`);
   }
 }
+
+async function loadArenaEffects() {
+  const [gravity, core, focus, shard] = await Promise.allSettled([
+    spells.loadGravity('assets/models/arena/vfx/gravity-seal.glb'),
+    loadGLB('assets/models/arena/vfx/veil-core.glb'),
+    loadGLB('assets/models/arena/vfx/hand-focus.glb'),
+    loadGLB('assets/models/arena/vfx/mana-shard.glb'),
+  ]);
+  if (gravity.status === 'rejected') spells.useSealFallback();
+  if (core.status === 'fulfilled') arena.attachCoreVisual(core.value.scene);
+  if (focus.status === 'fulfilled') {
+    playerAvatar.attachCastFocus(focus.value.scene.clone(true));
+    opponentAvatar.attachCastFocus(focus.value.scene.clone(true));
+  }
+  if (shard.status === 'fulfilled') arena.attachSpillVisual(shard.value.scene);
+
+  const failures = [gravity, core, focus, shard].filter(result => result.status === 'rejected');
+  if (failures.length) setStatus(`effect assets: ${failures.length} missing`);
+}
+
 let lastCast = null;
 let lastCastAt = -Infinity;
 let flashUntil = -Infinity;
@@ -322,10 +330,7 @@ const opponentHalo = createHalo(scene, 0x9b87ff);
 (async () => {
   const url = 'assets/models/arena/ringfall-halo.glb';
   try {
-    const response = await fetch(url, { method: 'HEAD' });
-    if (!response.ok) return;
-    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
-    const gltf = await new GLTFLoader().loadAsync(url);
+    const gltf = await loadGLB(url);
     playerHalo.attach(gltf.scene.clone(true));
     opponentHalo.attach(gltf.scene.clone(true));
   } catch (error) {
@@ -1960,6 +1965,7 @@ addEventListener('beforeunload', () => {
   for (const arrow of arrows) arrow.mesh.removeFromParent();
   arrowGeometry.dispose();
   arrowMaterial.dispose();
+  arena.dispose();
   playerHalo.dispose();
   opponentHalo.dispose();
   spells.dispose();
@@ -1990,3 +1996,4 @@ void loadArenaShell();
 void loadMeshyDuelists();
 void loadArenaProps();
 void loadBow();
+void loadArenaEffects();

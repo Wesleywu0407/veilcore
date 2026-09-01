@@ -11,6 +11,7 @@ import { initTracker, getFrame, disposeTracker } from './spell-room/tracker.js';
 import { createBowState, BOW } from './spell-room/archery.js';
 import { createBowAim, AIM } from './spell-room/aim.js';
 import { createBowView } from './arena/bow-view.js';
+import { loadGLB } from './arena/asset-library.js';
 
 const GOLD = '#ffd98a';
 const BLUE = '#8ab4ff';
@@ -62,10 +63,7 @@ bowView.setVisible(false);
 // and not the session.
 (async () => {
   try {
-    const response = await fetch('assets/models/arena/bow.glb', { method: 'HEAD' });
-    if (!response.ok) return;
-    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
-    const gltf = await new GLTFLoader().loadAsync('assets/models/arena/bow.glb');
+    const gltf = await loadGLB('assets/models/arena/bow.glb');
     bowView.attachLimbs(gltf.scene);
   } catch (error) {
     status = `bow model: ${error.message}`;

@@ -1,18 +1,8 @@
 import * as THREE from 'three';
+import { loadGLB } from './asset-library.js';
 
 const GOLD = 0xffd98a;
 const VIOLET = 0x9b87ff;
-
-function energyMaterial(colour, opacity) {
-  return new THREE.MeshBasicMaterial({
-    color: colour,
-    transparent: true,
-    opacity,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-  });
-}
 
 /** Lightweight arena-only defence and control effects. */
 export function createSpellSystem(scene) {
@@ -70,8 +60,11 @@ export function createSpellSystem(scene) {
 
     if (state.seal.until > now) {
       seal.group.visible = true;
-      seal.rings.rotation.z += dt * 1.5;
-      seal.material.opacity = 0.24 + Math.sin(now * 0.012) * 0.08;
+      seal.mount.rotation.z += dt * 0.75;
+      for (const material of seal.materials) {
+        material.opacity = 0.82 + Math.sin(now * 0.012) * 0.08;
+        material.emissiveIntensity = 0.18 + Math.sin(now * 0.01) * 0.08;
+      }
       const victim = state.seal.source === 'player' ? 'opponent' : 'player';
       const victimPosition = positions[victim];
       const dx = victimPosition.x - seal.group.position.x;
@@ -93,8 +86,7 @@ export function createSpellSystem(scene) {
     castAegis,
     castGravity,
     async loadAegis(url) {
-      const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
-      const gltf = await new GLTFLoader().loadAsync(url);
+      const gltf = await loadGLB(url);
       gltf.scene.updateMatrixWorld(true);
       const box = new THREE.Box3().setFromObject(gltf.scene);
       const size = box.getSize(new THREE.Vector3());
@@ -128,6 +120,57 @@ export function createSpellSystem(scene) {
         shield.mount.clear();
         shield.mount.add(model);
       }
+    },
+    async loadGravity(url) {
+      const gltf = await loadGLB(url);
+      const model = gltf.scene.clone(true);
+      model.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(model);
+      const centre = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const scale = 9.6 / Math.max(size.x, size.y, 0.001);
+      model.name = 'Meshy Gravity Seal';
+      model.scale.setScalar(scale);
+      model.position.set(-centre.x * scale, -centre.y * scale, -centre.z * scale);
+      seal.materials.length = 0;
+      model.traverse(object => {
+        if (!object.isMesh) return;
+        object.castShadow = false;
+        object.receiveShadow = false;
+        object.material = object.material.clone();
+        object.material.color.set(VIOLET);
+        object.material.emissive.set(0x39245f);
+        object.material.emissiveIntensity = 0.2;
+        object.material.transparent = true;
+        object.material.opacity = 0.88;
+        object.material.side = THREE.DoubleSide;
+        seal.materials.push(object.material);
+      });
+      seal.mount.clear();
+      seal.mount.add(model);
+    },
+    /**
+     * Only reached when the Meshy seal fails to load. A Gravity Seal you cannot
+     * see still slows the rival, so unlike the cathedral this effect must not
+     * fail silently -- one flat ring is enough to say where the field is.
+     */
+    useSealFallback() {
+      if (seal.materials.length) return;
+      // Flat, not additive: the arena floor is a pale lavender under the
+      // cathedral's fill light, and additive violet on top of it disappears.
+      const material = new THREE.MeshBasicMaterial({
+        color: VIOLET,
+        transparent: true,
+        opacity: 0.6,
+        depthWrite: false,
+        toneMapped: false,
+        side: THREE.DoubleSide,
+      });
+      const ring = new THREE.Mesh(new THREE.RingGeometry(1.6, 4.8, 64), material);
+      ring.name = 'Gravity Seal fallback';
+      seal.materials.push(material);
+      seal.mount.clear();
+      seal.mount.add(ring);
     },
     absorb,
     update,
@@ -165,18 +208,10 @@ function makeShield(scene, side) {
 
 function makeSeal(scene) {
   const group = new THREE.Group();
-  const material = energyMaterial(VIOLET, 0.28);
-  const disc = new THREE.Mesh(new THREE.CircleGeometry(4.8, 48), material);
-  disc.rotation.x = -Math.PI / 2;
-  group.add(disc);
-  const rings = new THREE.Group();
-  for (const radius of [1.6, 3.1, 4.55]) {
-    const ring = new THREE.Mesh(new THREE.RingGeometry(radius - 0.055, radius + 0.055, 64), energyMaterial(VIOLET, 0.82));
-    ring.rotation.x = -Math.PI / 2;
-    rings.add(ring);
-  }
-  group.add(rings);
+  const mount = new THREE.Group();
+  mount.rotation.x = -Math.PI / 2;
+  group.add(mount);
   group.visible = false;
   scene.add(group);
-  return { group, rings, material };
+  return { group, mount, materials: [] };
 }

@@ -222,6 +222,9 @@ Done:
   framing.
 - The practice range, and the bow on screen (`js/arena/bow-view.js`): the Meshy
   mesh with its baked string cut out, plus a procedural string and arrow.
+- Meshy arena effects — a textured Gravity Seal plus low-poly Veil Core, hand
+  focus and mana-shard GLBs. They share page-level loader/cache code and keep
+  their gameplay timing in the modules that own each effect.
 
 Open:
 
@@ -236,8 +239,9 @@ Open:
 |---|---|
 | `index.html` | the page, and all of its CSS |
 | `js/arena.js` | entry point: loop, camera, HUD, input, spell wiring |
-| `js/arena/scene.js` | the arena geometry and its environment map |
-| `js/arena/duelist.js` | one fighter: animation state machine, arm IK, cast spark |
+| `js/arena/scene.js` | the arena shell, Core and mana-drop mounts, and environment map |
+| `js/arena/asset-library.js` | one cached GLB loader shared by arena systems |
+| `js/arena/duelist.js` | one fighter: animation state machine, arm IK, Meshy hand focus |
 | `js/arena/arm-ik.js` | analytic two-bone IK for the drawing arm |
 | `js/arena/bow-view.js` | the bow on screen: mesh placement, string, arrow |
 | `js/arena/opponent.js` | the rival's behaviour |
@@ -249,7 +253,6 @@ Open:
 | `js/spell-room/magic.js` | pinch gate, stroke recording, rune recognition |
 | `js/spell-room/tracker.js` | webcam and MediaPipe |
 | `js/spell-room/one-euro.js` | the smoothing filter on the tracked points |
-| `js/spells/beam.js` | the beam effect |
 
 Balance lives entirely in `js/arena/config.js`. Change numbers there, not at the
 call sites.
@@ -280,10 +283,17 @@ by editing the GLBs directly. If you regenerate them, you have to redo this:
 The rig has **no finger bones** — `LeftHand`/`RightHand` are terminal. The arm
 can trace a rune; the fingers cannot curl. Meshy cannot add them.
 
+The small effects under `assets/models/arena/vfx/` are deliberately separate
+from the repaired character pipeline. They are Smart Topology GLBs with one
+primitive each: the Core is 2,078 triangles, the hand focus 1,170, and the mana
+shard 661. Gravity Seal is 2,472 triangles and carries one 1024px base-colour
+texture; the other three are textureless and receive the two team colours in
+the game. None of these effects casts a shadow.
+
 ## Tests
 
 ```bash
-npm run test         # 51 tests, no camera needed
+npm run test         # 80 tests, no camera needed
 npm run runes        # how far apart the rune shapes sit
 ```
 
