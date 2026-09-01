@@ -19,7 +19,7 @@ import { createBowAim } from './spell-room/aim.js';
 import { createInputMode } from './spell-room/input-mode.js';
 import { createBowView, DUEL_BOW_MOUNT } from './arena/bow-view.js';
 import { raySphereDistance, rayVerticalCapsuleDistance } from './arena/shot.js';
-import { createRoomClient, mirrorArenaPosition, normaliseRoomCode } from './arena/room-client.js';
+import { checkRoomServer, createRoomClient, mirrorArenaPosition, normaliseRoomCode } from './arena/room-client.js';
 
 const GOLD = '#ffd98a';
 const VIOLET = '#9b87ff';
@@ -35,6 +35,7 @@ const startPanel = document.querySelector('[data-arena-start]');
 const startButton = document.querySelector('[data-arena-enter]');
 const hostButton = document.querySelector('[data-arena-host]');
 const joinForm = document.querySelector('[data-arena-join]');
+const joinButton = joinForm?.querySelector('button');
 const roomCodeInput = document.querySelector('[data-arena-room-code]');
 const roomStatusLine = document.querySelector('[data-arena-room-status]');
 const errorLine = document.querySelector('[data-arena-error]');
@@ -82,6 +83,7 @@ let peerConnected = false;
 let roomRole = null;
 let remoteCharging = false;
 let networkSentAt = 0;
+let roomStatusRevision = 0;
 const remoteTargetPosition = opponentPosition.clone();
 
 // Meshy's rigger emits one clip per file, so the duelist's actions sit beside
@@ -939,13 +941,17 @@ startButton?.addEventListener('click', () => {
 });
 
 hostButton?.addEventListener('click', async () => {
+  setRoomControlsBusy(true);
+  setRoomStatus('OPENING A ROOM…');
   try {
     onlineDuel = true;
     const joined = await roomClient.connect({ mode: 'create' });
     setRoomStatus(`ROOM ${joined.room} · SHARE THIS CODE · WAITING FOR FRIEND`);
   } catch (error) {
     onlineDuel = false;
-    setRoomStatus(error.message);
+    setRoomStatus(roomConnectionMessage(error.message));
+  } finally {
+    setRoomControlsBusy(false);
   }
 });
 
@@ -953,13 +959,16 @@ joinForm?.addEventListener('submit', async event => {
   event.preventDefault();
   const code = normaliseRoomCode(roomCodeInput?.value);
   if (roomCodeInput) roomCodeInput.value = code;
+  setRoomControlsBusy(true);
   try {
     onlineDuel = true;
     setRoomStatus(`JOINING ROOM ${code}…`);
     await roomClient.connect({ mode: 'join', room: code });
   } catch (error) {
     onlineDuel = false;
-    setRoomStatus(error.message);
+    setRoomStatus(roomConnectionMessage(error.message));
+  } finally {
+    setRoomControlsBusy(false);
   }
 });
 
@@ -1584,7 +1593,32 @@ function setStatus(text) {
 }
 
 function setRoomStatus(text) {
+  roomStatusRevision++;
   if (roomStatusLine) roomStatusLine.textContent = text;
+}
+
+function setRoomControlsBusy(busy) {
+  if (hostButton) hostButton.disabled = busy;
+  if (joinButton) joinButton.disabled = busy;
+  if (roomCodeInput) roomCodeInput.disabled = busy;
+}
+
+function roomConnectionMessage(message) {
+  if (/unavailable|timed out|closed the connection/i.test(message)) {
+    return location.port === '5500'
+      ? 'LIVE SERVER IS SOLO ONLY · OPEN THE HTTPS SHARE LINK'
+      : 'DUEL SERVER OFFLINE · HOST MUST RUN npm run share AGAIN';
+  }
+  return message.toUpperCase();
+}
+
+async function refreshRoomServerStatus() {
+  const revision = roomStatusRevision;
+  const ready = await checkRoomServer();
+  if (revision !== roomStatusRevision) return;
+  setRoomStatus(ready
+    ? 'ONLINE DUEL READY · CREATE OR JOIN A ROOM'
+    : roomConnectionMessage('duel server unavailable'));
 }
 
 function resize() {
@@ -1602,6 +1636,7 @@ function resize() {
 }
 
 addEventListener('resize', resize);
+void refreshRoomServerStatus();
 addEventListener('beforeunload', () => {
   running = false;
   coverVideo?.pause();

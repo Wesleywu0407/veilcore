@@ -8,7 +8,7 @@
     "dev": "node scripts/duel-server.mjs",
     "cert": "sh scripts/create-local-cert.sh",
     "dev:https": "node scripts/duel-server.mjs --https",
-    "share": "ssh -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -R 80:localhost:5173 nokey@localhost.run",
+    "share": "node scripts/share-duel.mjs",
     "test": "node --test tests/*.test.mjs",
     "runes": "node scripts/rune-distance.mjs"
   }

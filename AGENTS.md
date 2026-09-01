@@ -54,7 +54,7 @@ dead branch — never edit the arena files there.** This repo is the live one.
 npm run dev    # HTTP static + WebSocket room server on port 5173
 npm run cert   # generate the ignored local CA and HTTPS certificate
 npm run dev:https
-npm run share  # temporary trusted HTTPS tunnel for a friend
+npm run share  # start server + temporary trusted HTTPS tunnel for a friend
 npm run test   # node --test, no camera needed
 npm run runes  # how far apart the rune shapes sit
 ```

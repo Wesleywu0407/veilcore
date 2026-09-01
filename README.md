@@ -51,21 +51,23 @@ mana and combat events cross the WebSocket.
 
 ### Playing a friend
 
-The easiest camera-safe route is a temporary HTTPS tunnel:
+The easiest camera-safe route is one command:
 
 ```bash
-# terminal one
-npm run dev
-
-# terminal two
 npm run share
 ```
 
-`npm run share` prints a temporary `https://…lhr.life` address. Both players
-open that same address. One presses **CREATE ROOM** and sends the four-character
-code; the other enters it and presses **JOIN ROOM**. The duel begins when the
-second player arrives. The tunnel URL is public but unlisted and disappears as
-soon as the SSH command stops.
+`npm run share` starts the game and room server, waits until it is healthy, then
+prints a temporary trusted Pinggy HTTPS address and verifies that it reaches
+Veilcore before marking it ready. Keep that terminal open. Both
+players open the same address. One presses **CREATE ROOM** and sends the
+four-character code; the other enters it and presses **JOIN ROOM**. The duel
+begins when the second player arrives. The tunnel URL is public but unlisted
+and disappears as soon as the command stops. The free link lasts up to 60
+minutes; running the command again creates a new address.
+
+Do not use a VS Code Live Server address (`127.0.0.1:5500`) for rooms. It serves
+the static page but has no WebSocket server, so it is deliberately solo-only.
 
 For a LAN-only HTTPS session, create a local certificate instead:
 

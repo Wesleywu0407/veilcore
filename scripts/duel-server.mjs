@@ -30,6 +30,20 @@ const rooms = createRoomRegistry();
 
 function staticResponse(request, response) {
   const url = new URL(request.url, `${useHttps ? 'https' : 'http'}://${request.headers.host}`);
+  if (url.pathname === '/__veilcore/health') {
+    const body = JSON.stringify({
+      ok: true,
+      service: 'veilcore-duel',
+      rooms: rooms.roomCount(),
+    });
+    response.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Length': Buffer.byteLength(body),
+    });
+    response.end(request.method === 'HEAD' ? undefined : body);
+    return;
+  }
   let pathname = decodeURIComponent(url.pathname);
   if (pathname === '/') pathname = '/index.html';
   const relative = normalize(pathname).replace(/^([/\\])+/, '');
@@ -161,12 +175,22 @@ server.on('upgrade', (request, socket) => {
 
 server.listen(port, host, () => {
   const protocol = useHttps ? 'https' : 'http';
-  console.log(`Veilcore duel server: ${protocol}://127.0.0.1:${port}/`);
+  const listeningPort = server.address().port;
+  console.log(`Veilcore duel server: ${protocol}://127.0.0.1:${listeningPort}/`);
   for (const addresses of Object.values(networkInterfaces())) {
     for (const address of addresses ?? []) {
       if (address.family === 'IPv4' && !address.internal) {
-        console.log(`LAN: ${protocol}://${address.address}:${port}/`);
+        console.log(`LAN: ${protocol}://${address.address}:${listeningPort}/`);
       }
     }
   }
+});
+
+server.on('error', error => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`Port ${port} is already in use. Stop the other server or set VEILCORE_PORT.`);
+  } else {
+    console.error(error);
+  }
+  process.exitCode = 1;
 });

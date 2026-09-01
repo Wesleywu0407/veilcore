@@ -114,6 +114,8 @@
     .arena-start button::after { content: "→"; float: right; font-size: 16px; line-height: 8px; }
     .arena-start button:hover { color: #15100a; border-color: var(--gold); transform: translateY(-2px); }
     .arena-start button:hover::before { transform: translateX(0); }
+    .arena-start button:disabled { cursor: wait; opacity: .48; transform: none; }
+    .arena-start button:disabled::before { transform: translateX(-102%); }
     .arena-start button.arena-secondary { border-color: rgba(155,135,255,.68); }
     .arena-start button.arena-secondary::before { background: var(--violet); }
     .arena-room-join { display: flex; gap: 8px; }
@@ -123,6 +125,7 @@
       font: 600 13px/1 "IBM Plex Mono", monospace; letter-spacing: .18em; text-transform: uppercase;
     }
     .arena-room-join input:focus { border-color: var(--violet); box-shadow: 0 0 18px rgba(155,135,255,.16); }
+    .arena-room-join input:disabled { cursor: wait; opacity: .48; }
     .arena-room-join button { width: 160px; }
     .arena-action-note { color: #8290a7; font-size: 8px; line-height: 1.75; letter-spacing: .15em; text-transform: uppercase; }
     .arena-action-note b { display: block; color: #d1d6df; font-weight: 500; }

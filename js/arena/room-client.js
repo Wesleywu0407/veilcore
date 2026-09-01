@@ -11,6 +11,32 @@ export function roomSocketUrl(locationLike, { mode, room = '' }) {
   return `${protocol}//${locationLike.host}/ws?${query}`;
 }
 
+export function roomHealthUrl(locationLike) {
+  return `${locationLike.protocol}//${locationLike.host}/__veilcore/health`;
+}
+
+export async function checkRoomServer({
+  locationLike = location,
+  fetchImpl = fetch,
+  timeoutMs = 2500,
+} = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(roomHealthUrl(locationLike), {
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (!response.ok) return false;
+    const body = await response.json();
+    return body?.ok === true && body?.service === 'veilcore-duel';
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function mirrorArenaPosition(position) {
   return [-Number(position?.[0] ?? 0), -Number(position?.[1] ?? 0)];
 }
@@ -23,6 +49,7 @@ export function createRoomClient({
   onState = () => {},
   onEvent = () => {},
   onReset = () => {},
+  connectionTimeoutMs = 8000,
 } = {}) {
   let socket = null;
   let room = null;
@@ -36,7 +63,9 @@ export function createRoomClient({
   }
 
   function connect({ mode, room: requestedRoom = '' }) {
-    if (socket) socket.close();
+    const previous = socket;
+    socket = null;
+    previous?.close();
     const roomCode = normaliseRoomCode(requestedRoom);
     if (mode === 'join' && !ROOM_PATTERN.test(roomCode)) {
       return Promise.reject(new Error('room code must be four characters'));
@@ -44,9 +73,29 @@ export function createRoomClient({
 
     return new Promise((resolve, reject) => {
       let welcomed = false;
-      socket = new WebSocketImpl(roomSocketUrl(locationLike, { mode, room: roomCode }));
-      socket.addEventListener('open', () => onStatus('connected to duel server'));
-      socket.addEventListener('message', event => {
+      let settled = false;
+      const candidate = new WebSocketImpl(roomSocketUrl(locationLike, { mode, room: roomCode }));
+      socket = candidate;
+      const timer = setTimeout(() => {
+        if (settled || socket !== candidate) return;
+        settled = true;
+        candidate.close();
+        reject(new Error('duel server connection timed out'));
+      }, connectionTimeoutMs);
+      const settle = callback => value => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        callback(value);
+      };
+      const succeed = settle(resolve);
+      const fail = settle(reject);
+
+      candidate.addEventListener('open', () => {
+        if (socket === candidate) onStatus('connected to duel server');
+      });
+      candidate.addEventListener('message', event => {
+        if (socket !== candidate) return;
         let message;
         try {
           message = JSON.parse(event.data);
@@ -59,7 +108,7 @@ export function createRoomClient({
           role = message.role;
           peerPresent = Boolean(message.peerPresent);
           onPeer(peerPresent, { room, role });
-          resolve({ room, role, peerPresent });
+          succeed({ room, role, peerPresent });
         } else if (message.type === 'peer') {
           peerPresent = Boolean(message.connected);
           onPeer(peerPresent, { room, role });
@@ -72,17 +121,19 @@ export function createRoomClient({
         } else if (message.type === 'error') {
           const error = new Error(message.message || 'room connection failed');
           onStatus(error.message);
-          if (!welcomed) reject(error);
+          if (!welcomed) fail(error);
         }
       });
-      socket.addEventListener('close', () => {
+      candidate.addEventListener('close', () => {
+        if (socket !== candidate) return;
         peerPresent = false;
         onPeer(false, { room, role });
-        if (!welcomed) reject(new Error('duel server closed the connection'));
+        if (!welcomed) fail(new Error('duel server closed the connection'));
       });
-      socket.addEventListener('error', () => {
-        onStatus('duel server unavailable');
-        if (!welcomed) reject(new Error('duel server unavailable'));
+      candidate.addEventListener('error', () => {
+        if (socket !== candidate) return;
+        if (!welcomed) fail(new Error('duel server unavailable'));
+        else onStatus('duel server unavailable');
       });
     });
   }
@@ -93,9 +144,12 @@ export function createRoomClient({
     sendEvent: event => peerPresent && send({ type: 'event', event }),
     sendReset: () => peerPresent && send({ type: 'reset' }),
     close() {
-      socket?.close();
+      const current = socket;
       socket = null;
       peerPresent = false;
+      room = null;
+      role = null;
+      current?.close();
     },
     get connected() { return socket?.readyState === WebSocketImpl.OPEN; },
     get peerPresent() { return peerPresent; },
