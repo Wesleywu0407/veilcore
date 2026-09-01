@@ -920,11 +920,6 @@ const CAST_FOV = 62;
 // arm. The bow arm was never the problem, and the bow arm is the only one this
 // shot contains -- which is why you see a left hand and no right one.
 const EYE_AHEAD = 0.30;    // in front of the face, so the helm falls behind the lens
-// Held first person sits this much above the head bone. The bow and fist
-// stances look down their own arm and want the true eye line; standing and
-// casting, that same height reads as stooping, because there is no raised arm
-// filling the lower frame to say how tall you are.
-const EYE_LIFT = 0.34;
 const BOW_EYE_FOV = 45;    // where the closing-in settles
 // Fists ride the same journey to the same eye and stop at a wider lens. 45 is
 // the angle that just fits a bow into frame; nothing has to fit into a punch,
@@ -1018,7 +1013,6 @@ function updateCamera(dt) {
   // surrounds the lens and you look at the inside of your own mask; 0.30 ahead
   // puts it behind the near plane, where back-face culling disposes of it.
   _bowPos.copy(_bowEye).addScaledVector(_flat, EYE_AHEAD);
-  if (plainEye) _bowPos.y += EYE_LIFT * smooth(bowFraming);
 
   // Body, then arm, then bow, then downrange. The last beat matters as much as
   // the others: a camera that settles pointing AT your own bow hand is a camera
