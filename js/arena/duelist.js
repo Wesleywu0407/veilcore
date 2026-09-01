@@ -16,6 +16,7 @@ const RUN_CLIP_SPEED = 4.8;
 const MAX_RUN_TIMESCALE = 2;
 
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
+const lerp = (a, b, t) => a + (b - a) * t;
 
 // Radians per second of turn, as an exponential rate: about 90% of the way round
 // in a fifth of a second. Fast enough that the duelist still feels keyboard
@@ -44,9 +45,20 @@ const REACH_TRACK = 18;
 const DRAW_POSE = {
   // The bow arm is nearly straight. Not fully: at exactly upper+fore the IK's
   // bend axis is undefined and the elbow pops, and a real archer keeps a soft
-  // elbow anyway.
-  bowExtend: 0.90,
-  bowRise: 0.06,      // slightly above the shoulder line
+  // elbow anyway. These three are held at 0.908 of armReach between them, which
+  // is that deliberate softness -- move one and move another to pay for it.
+  //
+  // `bowRise` is set so the bow hand lands at the duelist's own eye height,
+  // which is where an archer holds it and, since the duel sights down this arm
+  // in first person, where the bow has to be to sit on the line you are looking
+  // along. Measured off the rig: the shoulder is 285.58 and the eye 315.50, a
+  // gap of 29.92 against an armReach of 104.041. At the old 0.06 the hand sat
+  // 14.4 degrees below the eye, which put it in the bottom corner of the frame.
+  // bowExtend is 0.8548 rather than 0.90 to pay for the lift; the hand comes
+  // back toward the body by 0.048, which is nothing, and the elbow keeps its
+  // bend.
+  bowExtend: 0.8548,
+  bowRise: 0.288,     // the bow hand rides at eye height
   bowSpread: 0.10,    // out toward the bow side
 
   // Where the string hand ends up at full draw: the classic anchor, at the jaw.
@@ -64,6 +76,41 @@ const DRAW_POSE = {
   nockedForward: 0.66,
 
   fade: 12,           // how fast the pose takes the arms over and gives them back
+};
+
+// ── The punch ────────────────────────────────────────────────────────────────
+//
+// Solved for the same reason the draw is: the arm has to track how far the
+// player's own fist is pushed at the lens, continuously, and there is no punch
+// clip on this rig to scrub even if there were one worth scrubbing. Both arms
+// are held here whenever the fists are up -- the idle hand is holding a guard,
+// which is a pose too, and leaving it on the animation would have one arm
+// boxing while the other jogged.
+//
+// Same axes and same units as DRAW_POSE: fractions of the arm's own measured
+// length, +Z forward, +X the duelist's LEFT.
+const PUNCH_POSE = {
+  // Guard. Fists in close, at 0.428 of the arm -- a folded elbow, not a held
+  // one. Sat just under the eye line rather than on it so that the guard rests
+  // at the bottom of the frame in first person and a punch travels UP onto the
+  // sightline, which is what makes the throw read as a throw from inside the
+  // player's own head.
+  guardForward: 0.30,
+  guardRise: 0.26,
+  guardSpread: 0.16,
+
+  // Extended. reachRise matches DRAW_POSE.bowRise exactly: eye height, for the
+  // same reason the bow hand is there -- it is the only height that keeps the
+  // fist in shot all the way out. reachSpread brings the hand in toward the
+  // centre line the way a straight punch crosses, and reachForward is then
+  // whatever leaves the three of them at 0.908 of the arm, the same deliberate
+  // soft-elbow margin the draw is held at. Move one and move another to pay
+  // for it, or the IK straightens the arm and the elbow pops.
+  reachForward: 0.8602,
+  reachRise: 0.288,
+  reachSpread: 0.04,
+
+  fade: 14,           // a shade quicker than the draw: fists come up, bows are raised
 };
 
 // Signed shortest angle from `from` to `to`, so a turn never takes the long way.
@@ -216,6 +263,7 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
   const _bowHand = new THREE.Vector3();
   const _stringHand = new THREE.Vector3();
   const _nock = new THREE.Vector3();
+  const _fist = new THREE.Vector3();
   // A stable body-space parent for the bow mesh. Following the solved wrist
   // position without inheriting the terminal hand bone's twist keeps the limbs
   // vertical and the arrow aligned with the duelist's forward axis.
@@ -233,10 +281,18 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
   let drawPose = null;
   let drawWeight = 0;
   const lastDraw = { draw: 0, stringSide: 'right' };
+  // The fists, or null when they are down. Both extensions travel together in
+  // one object for the same reason the draw does: they are one stance, and the
+  // guard arm's pose is only meaningful beside the arm that is throwing.
+  let punchPose = null;
+  let punchWeight = 0;
+  const lastPunch = { left: 0, right: 0 };
   let reachTarget = null;    // world Vector3, or null to let the animation have the arm back
   let reachWeight = 0;
   const lastReach = new THREE.Vector3();   // kept so the fade-out has somewhere to go
   let imported = null;
+  let headBone = null;
+  let eyeLocal = null;   // the head's REST position in root space, measured at load
   let mixer = null;
   let actions = null;
   let activeAction = null;
@@ -332,6 +388,48 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
       return out;
     },
     /**
+     * World position of the bow hand, for a camera that has to frame it.
+     *
+     * bowAnchor is the honest answer, but only once the draw solve has run --
+     * it starts life at the root's own origin, so a camera asking too early
+     * would magnify the duelist's feet. Until then, hand back the shoulder,
+     * which is a point measured off the rig rather than a guess at one, and is
+     * within an arm's length of where the bow is about to be.
+     */
+    bowHandWorld(out) {
+      root.updateMatrixWorld(true);
+      if (drawWeight > 0.01) return bowAnchor.getWorldPosition(out);
+      if (shoulderLocal) return root.localToWorld(out.copy(shoulderLocal));
+      return out.copy(root.position).setY(root.position.y + 2.4);
+    },
+    /**
+     * The eye, for a camera that wants to look out of this duelist's head.
+     *
+     * Deliberately NOT the live Head bone. Head is animated in all three clips,
+     * so reading it every frame feeds the idle sway and the run bob straight
+     * into the lens -- and in first person that does not read as head movement,
+     * it reads as the BOW drifting, because the bow is rigid in this body's own
+     * space and the camera is the only thing moving. What is used instead is
+     * where the head sits at rest, measured off the rig once at load, which
+     * gives the same eye in the same place with none of the animation.
+     */
+    eyeWorld(out) {
+      root.updateMatrixWorld(true);
+      if (eyeLocal) return root.localToWorld(out.copy(eyeLocal));
+      return out.copy(root.position).setY(root.position.y + 3.15);
+    },
+    /**
+     * The bow arm's elbow -- the middle beat of a camera move that travels down
+     * the arm. Which physical arm that is follows the stance, the same way the
+     * draw solve picks it.
+     */
+    bowElbowWorld(out) {
+      const chain = lastDraw.stringSide === 'right' ? leftIK : armIK;
+      if (!chain) return null;
+      root.updateMatrixWorld(true);
+      return chain.bones.elbow.getWorldPosition(out);
+    },
+    /**
      * Hold a bow at `draw` (0 slack, 1 full), with the string on `stringSide`.
      * Pass null to put it away and give the arms back to the animation.
      *
@@ -350,6 +448,25 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
       drawPose = lastDraw;
     },
     get drawing() { return drawWeight > 0.01; },
+    /**
+     * Hold both fists, each at its own extension (0 guard, 1 thrown), or pass
+     * null to drop them and give the arms back to the animation.
+     *
+     * Takes both sides at once rather than one call per hand because the two
+     * arms are a single stance: a caller that could set them independently
+     * could also leave one of them stale, and a duelist holding a guard it was
+     * told about two seconds ago is worse than one holding no guard at all.
+     */
+    punch(extensions) {
+      if (!extensions) {
+        punchPose = null;
+        return;
+      }
+      lastPunch.left = clamp(Number.isFinite(extensions.left) ? extensions.left : 0, 0, 1);
+      lastPunch.right = clamp(Number.isFinite(extensions.right) ? extensions.right : 0, 0, 1);
+      punchPose = lastPunch;
+    },
+    get punching() { return punchWeight > 0.01; },
     flash() {
       hit = 1;
       // A stagger outranks whatever the body was doing, a cast included.
@@ -392,6 +509,11 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
       // space: down, and behind. Without it the bend plane comes from whatever
       // the animation happened to be doing, so a running duelist draws with an
       // elbow that orbits its own wrist.
+      headBone = imported.getObjectByName('Head');
+      if (headBone) {
+        root.updateMatrixWorld(true);
+        eyeLocal = root.worldToLocal(headBone.getWorldPosition(new THREE.Vector3()));
+      }
       armIK = createArmIK(imported, {
         shoulder: 'RightArm', elbow: 'RightForeArm', wrist: 'RightHand',
         pole: new THREE.Vector3(-0.35, -1, -0.45).normalize(),
@@ -488,7 +610,7 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
           // the raw targets: the gate can flicker for a frame, and swapping
           // clips on a flicker restarts a crossfade every frame, which is its
           // own kind of broken.
-          const masked = drawWeight > 0.01 ? 'both' : reachWeight > 0.01 ? 'right' : null;
+          const masked = drawWeight > 0.01 || punchWeight > 0.01 ? 'both' : reachWeight > 0.01 ? 'right' : null;
           play(masked === 'both' ? (moving ? actions.runBoth : actions.idleBoth)
             : masked === 'right' ? (moving ? actions.runRight : actions.idleRight)
             : (moving ? actions.run : actions.idle));
@@ -551,11 +673,34 @@ export function createDuelist(scene, { colour = 0xffd98a, name = 'Duelist' } = {
         stringIK.solve(root.localToWorld(_stringHand), drawWeight);
       }
 
+      punchWeight += ((punchPose ? 1 : 0) - punchWeight) * Math.min(1, dt * PUNCH_POSE.fade);
+      if (armIK && leftIK && shoulderLocal && leftShoulderLocal && punchWeight > 0.01) {
+        root.updateMatrixWorld(true);
+        for (const side of ['right', 'left']) {
+          const chain = side === 'right' ? armIK : leftIK;
+          const shoulder = side === 'right' ? shoulderLocal : leftShoulderLocal;
+          // +1 is out toward the duelist's own left, so the right arm spreads
+          // the other way. Same convention as the draw's stringSign.
+          const sign = side === 'right' ? -1 : 1;
+          const thrown = side === 'right' ? lastPunch.right : lastPunch.left;
+          _fist.set(
+            shoulder.x + sign * armReach * lerp(PUNCH_POSE.guardSpread, PUNCH_POSE.reachSpread, thrown),
+            shoulder.y + armReach * lerp(PUNCH_POSE.guardRise, PUNCH_POSE.reachRise, thrown),
+            shoulder.z + armReach * lerp(PUNCH_POSE.guardForward, PUNCH_POSE.reachForward, thrown),
+          );
+          chain.solve(root.localToWorld(_fist), punchWeight);
+          // Re-read between arms: the second solve walks the skeleton and needs
+          // the first one written through to matrixWorld, or it aims off a
+          // stale pose. Same reason the draw does it.
+          root.updateMatrixWorld(true);
+        }
+      }
+
       if (armIK) {
         // The bow owns the right arm while it is up, so the rune reach has to
         // let go of it -- otherwise a stale reach target fights the anchor and
         // the arm sits between the two, drawing nothing and holding nothing.
-        const reachWanted = reachTarget && drawWeight <= 0.01 ? 1 : 0;
+        const reachWanted = reachTarget && drawWeight <= 0.01 && punchWeight <= 0.01 ? 1 : 0;
         reachWeight += (reachWanted - reachWeight) * Math.min(1, dt * REACH_FADE);
         if (reachTarget) {
           lastReach.lerp(reachTarget, Math.min(1, dt * REACH_TRACK));

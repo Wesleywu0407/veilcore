@@ -23,8 +23,8 @@ npm run dev
 
 | | |
 |---|---|
-| **http://localhost:5173/** | the duel — press **BEGIN DUEL** |
-| **http://localhost:5173/practice.html** | the practice range — press **OPEN THE RANGE** |
+| **http://localhost:5174/** | the duel — press **BEGIN DUEL** |
+| **http://localhost:5174/practice.html** | the practice range — press **OPEN THE RANGE** |
 
 `npm run dev` starts the dependency-free static/WebSocket server on every local
 interface. It prints both the loopback and LAN addresses. A generic static
@@ -137,13 +137,27 @@ the keyboard too.
 | **H** | turn hand tracking on or off, without reloading |
 | **R** | next round, once the match has finished |
 
-Raise **one hand** to cast runes. Raise **both hands** to take up the bow: close
-one hand on the string, pull the wrists apart, aim by moving the bow hand, then
-open the string hand to loose. Lowering either hand returns to rune casting and
-clears the unfinished bow state; entering the bow likewise clears a partial
-rune, so the two gesture pipelines cannot fire each other by accident.
-The mirrored self view in the lower-right shows the tracked hand skeleton and
-the mode selected from the number of visible hands.
+Raise **one hand** to cast runes. Raise **both hands** for one of the two
+two-handed stances, and roll your wrists to say which:
+
+- **Knuckles upright** — the fist eye pointing at the ceiling, the way a hand
+  grips a bow riser — takes up the **bow**. Close one hand on the string, pull
+  the wrists apart, aim by moving the bow hand, then open the string hand to
+  loose.
+- **Knuckles flat** — the fist eye pointing left or right, the way a straight
+  punch lands — puts up your **fists**. Drive a fist at the lens to throw it.
+  Punching costs no mana and waits on no cooldown; what it needs instead is to
+  be within 2.2 of the rival and roughly facing them.
+
+The roll is read off the line across the knuckles, and both wrists have to agree
+before the stance changes, so a single misread hand cannot switch it under you.
+Finger closure is deliberately not part of that test — opening the string hand
+is how an arrow is loosed, and a stance that watched the fingers would drop the
+bow on the release frame. Lowering either hand returns to rune casting and
+clears whichever two-handed state was running; entering either stance likewise
+clears a partial rune, so the gesture pipelines cannot fire each other by
+accident. The mirrored self view in the lower-right shows the tracked hand
+skeleton and the live mode.
 
 ## The duel
 
@@ -231,6 +245,7 @@ Open:
 | `js/arena/config.js` | **every tuning number, in one file** |
 | `js/practice.js` | the practice range and its measurement panel |
 | `js/spell-room/archery.js` | two-handed bow: draw length, aim, the shot |
+| `js/spell-room/boxing.js` | fists: the wrist roll that picks the stance, and the punch |
 | `js/spell-room/magic.js` | pinch gate, stroke recording, rune recognition |
 | `js/spell-room/tracker.js` | webcam and MediaPipe |
 | `js/spell-room/one-euro.js` | the smoothing filter on the tracked points |

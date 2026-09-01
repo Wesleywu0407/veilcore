@@ -50,7 +50,13 @@ export function buildEnvironment(renderer) {
   panel(0x2a3350, 0.9, [0, -4.5, 0], [18, 18, 1]);      // dim bounce off the floor
 
   const pmrem = new THREE.PMREMGenerator(renderer);
-  const texture = pmrem.fromScene(room, 0.06).texture;
+  // The blur sigma, and it has a hard ceiling. PMREMGenerator cuts its Gaussian
+  // off at 20 samples, and asks for 1 + floor(3 * sigma * 2 * (size - 1) / PI)
+  // of them against a 256 cubeUV -- so 0.06 asked for 30, got 20, and said so
+  // in the console every load. Whatever 0.06 was chosen to look like was never
+  // what was rendered: the kernel was already being truncated. 0.038 asks for
+  // 19, which is a blur the generator actually performs.
+  const texture = pmrem.fromScene(room, 0.038).texture;
   pmrem.dispose();
   room.traverse(object => {
     object.geometry?.dispose?.();

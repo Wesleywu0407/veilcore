@@ -15,6 +15,7 @@ import { createHalo } from './spells/halo.js';
 import { initTracker, getFrame, isReady, disposeTracker } from './spell-room/tracker.js';
 import { isPinching, updateCast, currentStroke, resetMagic, RUNES, pinchDebug, TUNE } from './spell-room/magic.js';
 import { createBowState } from './spell-room/archery.js';
+import { createBoxingState } from './spell-room/boxing.js';
 import { createBowAim } from './spell-room/aim.js';
 import { createInputMode } from './spell-room/input-mode.js';
 import { createBowView, DUEL_BOW_MOUNT } from './arena/bow-view.js';
@@ -221,6 +222,11 @@ const inputMode = createInputMode();
 let bowRead = null;
 let bowMode = false;
 let bowStringSide = 'right';
+const boxing = createBoxingState();
+let fistMode = false;
+// Whether the rival is close enough to hit right now. Kept as state because the
+// HUD reads it every frame and the punch only asks at the moment it lands.
+let punchInRange = false;
 
 const FLASH_COLOUR = { cast: GOLD, fizzle: '#ff8b6b', overload: '#ff3d2e', blocked: '#6f7f9a', hit: '#b36cff' };
 
@@ -493,7 +499,7 @@ function applyRemoteEvent(event) {
     playerAvatar.flash();
     flashUntil = now + 320;
     flashKind = 'hit';
-    setStatus(`${event.source === 'bow' ? 'arrow' : 'spell'} hit you`);
+    setStatus(`${event.source === 'bow' ? 'arrow' : event.source === 'punch' ? 'a fist' : 'spell'} hit you`);
     return;
   }
   if (event.kind === 'core') {
@@ -619,6 +625,86 @@ function fireBow(power, now, reticle) {
   return true;
 }
 
+// ─── The punch ───────────────────────────────────────────────────────────────
+//
+// No mana, no cooldown, no projectile: a punch is a distance test and a cone
+// test, resolved on the frame the fist crosses the threshold. Everything that
+// makes it feel like anything -- the arm travelling, the guard, the lens -- is
+// elsewhere; this is only the question of whether it landed.
+
+const _punchFacing = new THREE.Vector3();
+const _punchToward = new THREE.Vector3();
+
+/** True if the rival is inside punching distance of where the player stands. */
+function opponentInPunchRange() {
+  return _punchToward.subVectors(opponentPosition, playerPosition).setY(0).length() <= DUEL.punchRange;
+}
+
+function throwPunch(side, now) {
+  if (match.phase !== 'playing') return false;
+
+  _punchToward.subVectors(opponentPosition, playerPosition).setY(0);
+  const range = _punchToward.length();
+  // Deliberately not a silent no-op out of range. The swing costs nothing, so
+  // letting it happen and miss is what teaches the distance -- and refusing to
+  // animate it would read as the tracking having dropped your hand.
+  if (range > DUEL.punchRange || range < 1e-4) {
+    setStatus('too far to punch');
+    return false;
+  }
+
+  // Facing rather than aim. In this stance the body is locked to the lens
+  // heading, so the cone is simply "roughly at what you are looking at".
+  _punchFacing.set(Math.sin(orbitYaw), 0, Math.cos(orbitYaw));
+  _punchToward.divideScalar(range);
+  if (_punchFacing.dot(_punchToward) < Math.cos((DUEL.punchCone * Math.PI) / 180)) {
+    setStatus('the punch went wide');
+    return false;
+  }
+
+  // The Aegis does not stop this, and that is the point of closing the distance.
+  // It is a barrier against things thrown from across the arena; a fist at 2.2
+  // is already inside it. Letting it absorb a punch would also hand the player
+  // a free way to strip a 24-mana shield with one jab, which is the opposite of
+  // what a shield should be worth.
+  damage(match, 'opponent', DUEL.punchDamage);
+  opponentAvatar.flash();
+  // Against a person rather than the bot, the local decrement is only a guess:
+  // applyRemoteState overwrites match.opponent.hp from whatever the peer says
+  // about itself, so a hit that is not sent is erased within 50ms. Every other
+  // attack tells the victim; so does this one.
+  sendRoomEvent({ kind: 'damage', amount: DUEL.punchDamage, source: 'punch' });
+  lastCast = { name: `${side === 'left' ? 'Left' : 'Right'} Straight`, charge: null };
+  lastCastAt = now;
+  flashUntil = now + 120;
+  flashKind = 'cast';
+  setStatus('punch landed');
+  return true;
+}
+
+// Nothing kept two duelists apart before this: the arena's colliders are
+// pillars, and at spell range the pair never met. Punching distance is 2.2, so
+// without a push they simply interpenetrate and the first-person lens ends up
+// inside the rival's chest. Split the overlap evenly and re-run each body
+// against the arena, so a shove can never push either of them through a pillar
+// or over the rim.
+const _apart = new THREE.Vector3();
+
+function separateDuelists() {
+  _apart.subVectors(playerPosition, opponentPosition).setY(0);
+  const gap = _apart.length();
+  if (gap >= DUEL.duelistClearance) return;
+  // Exactly coincident has no direction to push along. Any fixed one will do;
+  // the next frame has a real one.
+  if (gap < 1e-4) _apart.set(1, 0, 0);
+  else _apart.divideScalar(gap);
+  const push = (DUEL.duelistClearance - gap) / 2;
+  playerPosition.addScaledVector(_apart, push);
+  opponentPosition.addScaledVector(_apart, -push);
+  resolveArenaCollision(playerPosition);
+  resolveArenaCollision(opponentPosition);
+}
+
 // ─── Third-person controller ─────────────────────────────────────────────────
 
 const keys = new Set();
@@ -698,6 +784,7 @@ let debugSide = 'right';
 function updateDebugBow() {
   if (tracking) return;
   bowMode = debugBow;
+  fistMode = false;
   bowStringSide = debugSide;
   bowRead = debugBow
     ? { phase: 'nocked', draw: debugDraw, peak: debugDraw, spans: 0, stringSide: debugSide }
@@ -730,10 +817,23 @@ function movePlayer(dt, now) {
   if (keys.has('KeyS')) _move.sub(_forward);
   if (keys.has('KeyA')) _move.sub(_right);
   if (keys.has('KeyD')) _move.add(_right);
+  // While either two-handed stance is up the body faces where the LENS is aimed,
+  // and nothing else.
+  //
+  // Everywhere else the duelist turns to face what it is doing -- the rival when
+  // standing, the direction of travel when walking. In first person both of
+  // those are wrong, and wrong in a way that is invisible from any other camera:
+  // the bow is rigid in the body's space, so every degree the body turns away
+  // from the lens slides the bow across the frame. Strafing was the worst of it,
+  // turning the body ninety degrees to face the walk while the view stayed on
+  // the rival, which threw the bow clean out of shot. Facing _forward keeps the
+  // body and the lens on the same heading, which is also what an archer does:
+  // you turn to your target and strafe without turning.
   if (_move.lengthSq() === 0) {
     // Hold whatever facing the stroke started on; re-aiming here is the other
     // half of the same sway.
-    if (!playerAvatar.reaching) {
+    if (bowMode || fistMode) playerAvatar.face(_forward);
+    else if (!playerAvatar.reaching) {
       _look.subVectors(opponentPosition, playerPosition).setY(0).normalize();
       playerAvatar.face(_look);
     }
@@ -743,7 +843,7 @@ function movePlayer(dt, now) {
   _move.normalize();
   playerPosition.addScaledVector(_move, DUEL.playerSpeed * dt);
   resolveArenaCollision(playerPosition);
-  playerAvatar.face(_move);
+  playerAvatar.face(bowMode || fistMode ? _forward : _move);
   return DUEL.playerSpeed;
 }
 
@@ -788,12 +888,48 @@ const CAST_LOOK_Y = 2.61;
 const CAST_LOOK_FWD = 0.72;
 const DUEL_FOV = 58;
 const CAST_FOV = 62;
-const BOW_BACK = 5.0;
-const BOW_UP = 3.15;
-const BOW_SIDE = 1.1;
-const BOW_LOOK_Y = 2.05;
-const BOW_LOOK_FWD = 6.5;
-const BOW_FOV = 58;
+// Drawing a bow goes to FIRST PERSON, and it gets there as a move rather than a
+// swap: the lens leaves the chase camera, travels in to the duelist's own eye,
+// and while it travels the look slides down the body -- torso, then the bow
+// arm's elbow, then the bow itself -- before settling downrange and closing in.
+//
+// This works on this rig where the earlier attempt did not, and the difference
+// is which arm you are looking at. Measured off the skeleton at full draw, from
+// the Head bone: the bow hand sits 1.06 ahead of the eye and 26 degrees off
+// axis, comfortably photographable; the string hand sits 0.16 away at 73
+// degrees off axis, which is to say against your own cheek and outside any
+// sane frame. The sweep that rejected first person was measuring the string
+// arm. The bow arm was never the problem, and the bow arm is the only one this
+// shot contains -- which is why you see a left hand and no right one.
+const EYE_AHEAD = 0.30;    // in front of the face, so the helm falls behind the lens
+const BOW_EYE_FOV = 45;    // where the closing-in settles
+// Fists ride the same journey to the same eye and stop at a wider lens. 45 is
+// the angle that just fits a bow into frame; nothing has to fit into a punch,
+// and closing to 2.2 of someone through a 45-degree lens is looking down a
+// straw. Only the lens changes between the two, so rolling the wrists mid-duel
+// widens the view instead of flying the camera out and back in.
+const FIST_EYE_FOV = 65;
+// The beats of the move, as fractions of the travel. They overlap on purpose:
+// each blend starts before the last has finished, so the look flows down the
+// arm instead of stopping at each joint.
+const BEAT_ELBOW = [0.25, 0.62];
+const BEAT_BOW = [0.55, 0.86];
+const BEAT_DOWNRANGE = [0.78, 1.0];
+const BEAT_ZOOM = [0.60, 1.0];
+// Slow enough to read as a journey rather than a transition, quick enough that
+// you are not waiting on it to shoot. At 2.7 the move arrives in a little over
+// a second, with the last beat -- the lift off the bow and the closing in --
+// taking up the final third of that.
+const BOW_MOVE_RATE = 2.7;
+const stage = (t, [a, b]) => clamp((t - a) / (b - a), 0, 1);
+const smooth = t => t * t * (3 - 2 * t);
+const _bowElbow = new THREE.Vector3();
+const _bowEye = new THREE.Vector3();
+const _downrange = new THREE.Vector3();
+// Where the first-person lens settles. Held across frames rather than picked
+// each one so that bow and fists ease into each other's framing.
+let eyeFov = BOW_EYE_FOV;
+const _bowHand = new THREE.Vector3();
 const _flat = new THREE.Vector3();
 const _chasePos = new THREE.Vector3();
 const _chaseLook = new THREE.Vector3();
@@ -809,18 +945,22 @@ const _bowLook = new THREE.Vector3();
 const castCamera = new THREE.PerspectiveCamera(CAST_FOV, 1, 0.1, 180);
 
 function updateCamera(dt) {
-  const wantCast = playerAvatar.reaching && !bowMode ? 1 : 0;
-  const wantBow = bowMode ? 1 : 0;
+  const eyeMode = bowMode || fistMode;
+  const wantCast = playerAvatar.reaching && !eyeMode ? 1 : 0;
+  const wantBow = eyeMode ? 1 : 0;
   castFraming += (wantCast - castFraming) * Math.min(1, dt * 9);
-  bowFraming += (wantBow - bowFraming) * Math.min(1, dt * 7);
+  bowFraming += (wantBow - bowFraming) * Math.min(1, dt * BOW_MOVE_RATE);
+  // Eased at the same rate as the move itself, so a wrist roll reads as one
+  // gesture rather than as the lens snapping while the body stays put.
+  eyeFov += ((fistMode ? FIST_EYE_FOV : BOW_EYE_FOV) - eyeFov) * Math.min(1, dt * BOW_MOVE_RATE);
 
-  // A slightly wider lens while casting, to keep the whole drawing arc in frame
-  // from this much closer camera.
-  const fov = lerp(lerp(DUEL_FOV, CAST_FOV, castFraming), BOW_FOV, bowFraming);
-  if (Math.abs(camera.fov - fov) > 0.01) {
-    camera.fov = fov;
-    camera.updateProjectionMatrix();
-  }
+  // The three things the move looks at on its way in. With the fists up there
+  // is no drawn bow, so bowHandWorld hands back the shoulder instead -- which
+  // keeps the journey body, arm, forward, and the last beat lifts off it
+  // anyway.
+  playerAvatar.bowHandWorld(_bowHand);
+  if (!playerAvatar.bowElbowWorld(_bowElbow)) _bowElbow.copy(_bowHand);
+  playerAvatar.eyeWorld(_bowEye);
 
   _forward.set(Math.sin(orbitYaw), Math.sin(orbitPitch), Math.cos(orbitYaw)).normalize();
   // Horizontal only. The casting view must not inherit the chase camera's pitch,
@@ -839,18 +979,28 @@ function updateCamera(dt) {
   _castLook.copy(playerPosition).addScaledVector(_flat, CAST_LOOK_FWD);
   _castLook.y += CAST_LOOK_Y;
 
-  // A close third-person view, never first person: the rig's elbow and forearm
-  // need to stay in front of the lens. Mirror with the actual string hand so a
-  // left-handed stance gets the same composition. Look from the bow side;
-  // from the string shoulder the forearm sits directly
-  // between the lens and the face, which hid both the grip and the arrow.
-  const shoulderSide = bowStringSide === 'right' ? -1 : 1;
-  _bowPos.copy(playerPosition)
-    .addScaledVector(_flat, -BOW_BACK)
-    .addScaledVector(_right, BOW_SIDE * shoulderSide);
-  _bowPos.y += BOW_UP;
-  _bowLook.copy(playerPosition).addScaledVector(_flat, BOW_LOOK_FWD);
-  _bowLook.y += BOW_LOOK_Y;
+  // The eye, nudged forward of the face. At the Head bone itself the helm
+  // surrounds the lens and you look at the inside of your own mask; 0.30 ahead
+  // puts it behind the near plane, where back-face culling disposes of it.
+  _bowPos.copy(_bowEye).addScaledVector(_flat, EYE_AHEAD);
+
+  // Body, then arm, then bow, then downrange. The last beat matters as much as
+  // the others: a camera that settles pointing AT your own bow hand is a camera
+  // you cannot aim, so the move ends by lifting off the bow and looking out
+  // over it -- which is what leaves the bow sitting low and to the left, held
+  // in the left hand, exactly where an archer's own bow sits.
+  _bowLook.copy(_chaseLook)
+    .lerp(_bowElbow, stage(bowFraming, BEAT_ELBOW))
+    .lerp(_bowHand, stage(bowFraming, BEAT_BOW))
+    .lerp(_downrange.copy(_bowPos).addScaledVector(_flat, 12), stage(bowFraming, BEAT_DOWNRANGE));
+
+  // A slightly wider lens while casting, to keep the whole drawing arc in frame
+  // from this much closer camera.
+  const fov = lerp(lerp(DUEL_FOV, CAST_FOV, castFraming), eyeFov, stage(bowFraming, BEAT_ZOOM));
+  if (Math.abs(camera.fov - fov) > 0.01) {
+    camera.fov = fov;
+    camera.updateProjectionMatrix();
+  }
 
   castCamera.aspect = camera.aspect;
   castCamera.position.copy(_castPos);
@@ -858,11 +1008,18 @@ function updateCamera(dt) {
   castCamera.updateProjectionMatrix();
   castCamera.updateMatrixWorld(true);
 
-  _cameraPosition.lerpVectors(_chasePos, _castPos, castFraming).lerp(_bowPos, bowFraming);
-  _look.lerpVectors(_chaseLook, _castLook, castFraming).lerp(_bowLook, bowFraming);
+  const moved = smooth(bowFraming);
+  _cameraPosition.lerpVectors(_chasePos, _castPos, castFraming).lerp(_bowPos, moved);
+  _look.lerpVectors(_chaseLook, _castLook, castFraming).lerp(_bowLook, moved);
   // Snappier the further into the casting view we are; the duelling chase camera
   // wants the lazy follow, the swap onto the shoulder does not.
-  camera.position.lerp(_cameraPosition, lerp(0.18, 0.55, Math.max(castFraming, bowFraming)));
+  //
+  // The bow view wants NO follow at all by the time it arrives. A lens that
+  // chases its own target is always a little behind the body, and in first
+  // person that lag is not felt as camera softness -- it is seen as the bow
+  // sliding around, since the bow is nailed to the body and the lens is the only
+  // thing adrift. Blending the smoothing out to 1 locks them together.
+  camera.position.lerp(_cameraPosition, lerp(lerp(0.18, 0.55, castFraming), 1, moved));
   camera.lookAt(_look);
 }
 
@@ -891,6 +1048,10 @@ async function toggleTracking() {
     bowMode = false;
     playerAvatar.drawBow(null);
     bowView.setVisible(false);
+    boxing.reset();
+    fistMode = false;
+    punchInRange = false;
+    playerAvatar.punch(null);
     disposeTracker();
     setSelfieVisible(false);
     setStatus('webcam off');
@@ -985,11 +1146,41 @@ function updateHand(now) {
   const frame = getFrame();
   const mode = inputMode.update(frame.hands);
 
+  if (mode.mode === 'fist') {
+    if (mode.changed) {
+      resetMagic();
+      playerAvatar.reach(null);
+      bowState.reset();
+      bowAim.reset();
+      bowRead = null;
+      playerAvatar.drawBow(null);
+      bowView.setVisible(false);
+      // Fresh baselines. Carrying the ones from before the wrists rolled would
+      // measure this stance against how the hands sat in the last one.
+      boxing.reset();
+    }
+    bowMode = false;
+    fistMode = true;
+    const fists = boxing.update(frame.hands, now);
+    playerAvatar.punch({ left: fists.left.extension, right: fists.right.extension });
+    punchInRange = opponentInPunchRange();
+    // A raised guard is not a telegraph. Leaving this on would have the rival
+    // shield itself for as long as the fists are up, which is the whole match.
+    playerCharging = false;
+    if (fists.left.punched) throwPunch('left', now);
+    if (fists.right.punched) throwPunch('right', now);
+    drawFistLayer(frame, fists);
+    return;
+  }
+
   if (mode.mode === 'bow') {
     if (mode.changed) {
       resetMagic();
       playerAvatar.reach(null);
       bowAim.reset();
+      fistMode = false;
+      playerAvatar.punch(null);
+      boxing.reset();
     }
     bowMode = true;
     bowRead = bowState.update(frame.hands, now);
@@ -1013,13 +1204,17 @@ function updateHand(now) {
     return;
   }
 
-  if (mode.changed || bowMode) {
+  if (mode.changed || bowMode || fistMode) {
     bowState.reset();
     bowAim.reset();
     bowRead = null;
     bowMode = false;
     playerAvatar.drawBow(null);
     bowView.setVisible(false);
+    boxing.reset();
+    fistMode = false;
+    punchInRange = false;
+    playerAvatar.punch(null);
     resetMagic();
   }
   const gate = isPinching(frame.tracked ? frame.landmarks : null, frame.handScale, now);
@@ -1112,10 +1307,58 @@ function reportFatal(error, where) {
   }
 }
 
+// ── Whose error is it ────────────────────────────────────────────────────────
+//
+// Not every error on this page belongs to this page. A browser extension that
+// injects a script into the document throws into the same window, and the two
+// handlers below used to catch that, stop the loop, and put someone else's
+// crash on the glass as though the duel had died. The one that actually
+// happened was a pair of crypto wallet extensions arguing over which of them
+// gets to define window.ethereum -- nothing to do with a duel, and it ended
+// the match.
+//
+// So attribution decides whether an error is FATAL. Everything is still
+// reported, because an error nobody hears about is how the evening got lost in
+// the first place; a foreign one just goes to the console and the game keeps
+// running.
+const OWN_ORIGIN = location.origin && location.origin !== 'null' ? location.origin : null;
+
+// Opened straight off the filesystem there is no origin to compare against, so
+// nothing can be attributed and the old behaviour -- everything is fatal -- is
+// the safer of the two failure modes.
+const isOurScript = filename =>
+  !OWN_ORIGIN || (typeof filename === 'string' && filename.startsWith(OWN_ORIGIN));
+
+// A rejection carries no filename, only whatever stack its reason happens to
+// have. An unattributable one is far more often an extension's than ours, and
+// stopping the duel on a stranger's promise is worse than carrying on with a
+// line in the console -- so silence here means "not ours".
+const isOurRejection = reason =>
+  !OWN_ORIGIN || (typeof reason?.stack === 'string' && reason.stack.includes(OWN_ORIGIN));
+
+// Extensions can be chatty, and one that throws every frame would bury the
+// console it is being written to. One line per distinct message is enough to
+// tell you it is happening.
+const foreignSeen = new Set();
+
+function reportForeign(error, where) {
+  const message = String(error?.message ?? error);
+  if (foreignSeen.has(message)) return;
+  foreignSeen.add(message);
+  console.warn(`[veilcore] ${where} from outside this page — ignored, the duel is still running:`, error);
+}
+
 // Anything thrown outside the loop -- the tracker's own callback, a late asset
 // load -- would otherwise reach only the console.
-addEventListener('error', event => reportFatal(event.error ?? event.message, 'uncaught'));
-addEventListener('unhandledrejection', event => reportFatal(event.reason, 'unhandled rejection'));
+addEventListener('error', event => {
+  const error = event.error ?? event.message;
+  if (isOurScript(event.filename)) reportFatal(error, 'uncaught');
+  else reportForeign(error, 'uncaught error');
+});
+addEventListener('unhandledrejection', event => {
+  if (isOurRejection(event.reason)) reportFatal(event.reason, 'unhandled rejection');
+  else reportForeign(event.reason, 'unhandled rejection');
+});
 
 function loop(now) {
   if (!running) return;
@@ -1164,6 +1407,19 @@ function step(now) {
     }
   }
 
+  // After both have moved, before either is drawn, and outside the branch:
+  // walking into a real opponent is exactly as wrong as walking into the bot.
+  // Doing it here rather than inside each body's own collision pass is what
+  // makes the push symmetric.
+  //
+  // Online, only half of it sticks. The rival's position is eased toward what
+  // the network last said, so shoving it locally is undone within a few frames
+  // -- but shoving YOURSELF out persists, and the peer is running this same
+  // line against you, so the pair still comes apart.
+  separateDuelists();
+  playerAvatar.setPosition(playerPosition);
+  opponentAvatar.setPosition(opponentPosition);
+
   const playerInWell = Math.hypot(playerPosition.x, playerPosition.z) <= DUEL.wellRadius;
   const opponentInWell = Math.hypot(opponentPosition.x, opponentPosition.z) <= DUEL.wellRadius;
   if (!onlineDuel || peerConnected) {
@@ -1207,6 +1463,8 @@ function resetRound({ broadcast = true } = {}) {
   arena.clearSpills();
   for (const id of Object.keys(cooldowns)) cooldowns[id] = 0;
   resetMagic();
+  boxing.reset();
+  punchInRange = false;
   if (broadcast && onlineDuel) roomClient.sendReset();
   setStatus('new duel');
 }
@@ -1227,7 +1485,10 @@ function drawSelfie(frame) {
   if (rect.width < 2 || rect.height < 2) return;
 
   const hands = frame.hands ?? [];
-  const mode = hands.length === 2 ? 'BOW' : hands.length === 1 ? 'RUNES' : 'SHOW HANDS';
+  // Two hands no longer mean one thing, so this reads the live mode rather than
+  // counting hands and assuming.
+  const mode = hands.length === 2 ? (fistMode ? 'FIST' : 'BOW')
+    : hands.length === 1 ? 'RUNES' : 'SHOW HANDS';
   const x = point => rect.left + point.x * rect.width;
   const y = point => rect.top + point.y * rect.height;
 
@@ -1289,6 +1550,42 @@ function handTarget(tip) {
   _handTarget.set(tip.x * 2 - 1, -(tip.y * 2 - 1), 0.5).unproject(castCamera);
   return _handTarget.sub(castCamera.position).normalize()
     .multiplyScalar(HAND_DEPTH).add(castCamera.position);
+}
+
+// The fists, on the glass. Deliberately quiet: unlike the bow there is nothing
+// to aim, so this is a readout rather than a sight -- how far each hand has
+// been pushed, and whether the rival is close enough for it to matter.
+function drawFistLayer(frame, fists) {
+  const width = innerWidth;
+  const height = innerHeight;
+  if (frame.hands?.length !== 2) return;
+
+  for (const hand of frame.hands) {
+    const state = hand.side === 'left' ? fists.left : fists.right;
+    if (!state?.present) continue;
+    const x = hand.wrist.x * width;
+    const y = hand.wrist.y * height;
+    // Grows with the throw, filled once the blow has actually gone out.
+    const radius = 8 + state.extension * 20;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.strokeStyle = state.thrown ? GOLD : 'rgba(138,180,255,.55)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    if (state.thrown) {
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,217,138,.18)';
+      ctx.fill();
+    }
+  }
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.font = "500 10px 'IBM Plex Mono', monospace";
+  ctx.fillStyle = punchInRange ? GOLD : 'rgba(138,180,255,.6)';
+  ctx.fillText(punchInRange ? 'IN RANGE' : 'CLOSE IN', width / 2, height * 0.62);
+  ctx.restore();
 }
 
 function drawBowLayer(frame, bow) {
@@ -1550,19 +1847,36 @@ function drawHud(now, botState) {
   const selected = RUNES.find(rune => rune.id === selectedRuneId)?.name ?? 'Ringfall';
   const activeCooldown = bowMode ? cooldowns.bow : cooldowns[selectedRuneId];
   const cooldown = activeCooldown > 0 ? ` · cooldown ${activeCooldown.toFixed(1)}` : '';
-  ctx.fillText(bowMode
-    ? `WASD · BOW ${bowStringSide.toUpperCase()} STRING · RELEASE TO SHOOT${cooldown}`
-    : `WASD · 1/2/3 ${selected} · TAB ${targetMode} · J/K cast${cooldown}`,
+  // The fists have no cooldown and no cost, so the row that usually carries
+  // those carries the one thing left that changes: whether you are close enough.
+  // At a 65-degree lens, 2.2 is genuinely hard to judge by eye.
+  if (fistMode) ctx.fillStyle = punchInRange ? GOLD : '#7f899f';
+  ctx.fillText(fistMode
+    ? `WASD · FISTS UP · ${punchInRange ? 'IN RANGE — PUNCH' : 'CLOSE IN TO PUNCH'}`
+    : bowMode
+      ? `WASD · BOW ${bowStringSide.toUpperCase()} STRING · RELEASE TO SHOOT${cooldown}`
+      : `WASD · 1/2/3 ${selected} · TAB ${targetMode} · J/K cast${cooldown}`,
   24, height - 24);
+  ctx.fillStyle = '#7f899f';
   if (lastCast && now - lastCastAt < 1800) {
     ctx.fillStyle = GOLD;
-    ctx.fillText(`${lastCast.name} ${Math.round(lastCast.charge * 100)}%`, 24, height - 44);
+    ctx.fillText(Number.isFinite(lastCast.charge)
+      ? `${lastCast.name} ${Math.round(lastCast.charge * 100)}%`
+      : lastCast.name, 24, height - 44);
   }
-  if (!bowMode) drawRuneLegend(height);
+  if (!bowMode && !fistMode) drawRuneLegend(height);
 
   if (tracking) {
     ctx.textAlign = 'right';
-    if (bowMode) {
+    if (fistMode) {
+      // Both ratios, raw. If a punch stops registering this says immediately
+      // whether the hand is not reaching the threshold or the baseline has
+      // crept up under it.
+      const left = boxing.left.ratio;
+      const right = boxing.right.ratio;
+      ctx.fillStyle = boxing.left.thrown || boxing.right.thrown ? GOLD : '#8ab4ff';
+      ctx.fillText(`FISTS · L ${left.toFixed(2)} · R ${right.toFixed(2)}`, width - 24, height - 24);
+    } else if (bowMode) {
       ctx.fillStyle = bowRead?.phase === 'nocked' ? GOLD : '#8ab4ff';
       ctx.fillText(bowRead?.phase === 'nocked'
         ? `BOW ${Math.round((bowRead.draw ?? 0) * 100)}% · ${bowRead.spans.toFixed(2)} SPANS`

@@ -16,6 +16,7 @@ export const LM = {
   MIDDLE_MCP: 9,
   MIDDLE_TIP: 12,
   RING_TIP: 16,
+  PINKY_MCP: 17,    // with INDEX_MCP, the line across the knuckles — the wrist's roll
   PINKY_TIP: 20,
 };
 
