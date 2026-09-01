@@ -2001,7 +2001,7 @@ function drawHud(now, botState) {
     ? `WASD · FISTS UP · ${punchInRange ? 'IN RANGE — PUNCH' : 'CLOSE IN TO PUNCH'}`
     : bowMode
       ? `WASD · BOW ${bowStringSide.toUpperCase()} STRING · RELEASE TO SHOOT${cooldown}`
-      : `WASD · 1/2/3 ${selected} · TAB ${targetMode} · J/K cast${cooldown}`,
+      : `WASD · 1/2/3 ${selected} · TAB ${targetMode} · J/K cast · V ${forcedEye ? 'EYE' : 'chase'}${cooldown}`,
   24, height - 24);
   ctx.fillStyle = '#7f899f';
   if (lastCast && now - lastCastAt < 1800) {

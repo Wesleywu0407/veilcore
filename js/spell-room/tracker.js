@@ -37,16 +37,21 @@ const MODEL_URL =
 const POSE_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
 
-// The body runs at a quarter of the hands' rate. An elbow travels a fraction of
-// the distance a fingertip does and the IK eases toward the hint anyway, so the
-// second model does not need paying for on every detection.
+// ── The body model is OFF by default, and that is a considered trade ──
 //
-// 2 was the first guess, made without a camera to measure on. With one attached
-// the quality governor dropped the duel to `low`, which is the renderer being
-// starved by the detect loop rather than by anything it draws. 4 halves that
-// cost again. Raise it if the arms feel laggy; if the frame rate still suffers
-// at 4, the body is not what is costing it and the hands should be looked at
-// instead.
+// detectLoop() has its own requestAnimationFrame chain, which decouples its
+// RATE from the renderer's but not its COST: both run on the one main thread
+// and share one frame budget, so every millisecond MediaPipe spends inferring
+// is a millisecond the duel does not get to draw in. A second model was enough
+// to push the quality governor down to `low` on a real machine, and a duel that
+// drops frames while you are drawing a bow is worse than one whose elbow
+// occasionally clips its own ribs.
+//
+// Turn it on to get tracked elbows back; the arm falls back to a fixed bend
+// hint without it, which is what it always used before. Thinning it with
+// POSE_EVERY was not enough on its own -- the cost is in loading and running a
+// second model at all, not in how often.
+const TRACK_BODY = false;
 const POSE_EVERY = 4;
 
 let video = null;
@@ -209,6 +214,13 @@ export async function initTracker(videoEl, onStage = () => {}) {
   // browser, a blocked CDN, a machine that cannot afford a second model -- the
   // duel carries on with hands only and the arms fall back to a fixed elbow
   // hint, which is exactly what they did before this existed.
+  if (!TRACK_BODY) {
+    onStage("ready");
+    running = true;
+    detectLoop();
+    return true;
+  }
+
   onStage("loading the body model (5.5 MB)");
   try {
     poseLandmarker = await withTimeout(
