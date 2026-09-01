@@ -19,9 +19,11 @@
 import {
   FilesetResolver,
   HandLandmarker,
+  PoseLandmarker,
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
 import { LM, dist } from "./vec.js";
+import { readPose } from "./pose.js";
 import { makeOneEuro } from "./one-euro.js";
 
 export { LM, dist };
@@ -29,11 +31,25 @@ export { LM, dist };
 const WASM_ROOT = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+// Lite, not full. The body is only ever asked which way an elbow is bent, and
+// the heavier models buy accuracy in places -- finger-level wrist rotation,
+// foot orientation -- that nothing here reads.
+const POSE_MODEL_URL =
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+
+// The body runs at half the hands' rate. An elbow travels a fraction of the
+// distance a fingertip does, and the IK eases toward the hint anyway, so the
+// second model does not need to be paid for on every detection. Raise it to 1
+// if the arms feel laggy, lower the hands instead if the frame rate suffers --
+// but measure before either, on the machine that has the camera.
+const POSE_EVERY = 2;
 
 let video = null;
 let landmarker = null;
+let poseLandmarker = null;
 let running = false;
 let lastVideoTime = -1;
+let detections = 0;
 
 // ─── Smoothing ────────────────────────────────────────────────────────────────
 //
@@ -93,6 +109,17 @@ const frame = {
   // position is the sturdier signal. The label is passed through as `reported`
   // for anyone who wants to compare.
   hands: [],
+
+  // The body, when the pose model is loaded and can see one. Null otherwise --
+  // including when the model failed to load at all, which is a supported state:
+  // the duel played for months on hands alone and still has to.
+  //
+  // `left` and `right` are the PLAYER'S own sides, already un-mirrored, each
+  // carrying { shoulder, elbow, wrist, hip } in the same normalized 0..1 space
+  // as `tip`. Any joint the model could not actually see is null rather than a
+  // guess; see pose.js.
+  pose: null,
+  poseAt: 0,
 };
 
 const EMPTY_HANDS = [];
@@ -173,6 +200,25 @@ export async function initTracker(videoEl, onStage = () => {}) {
     );
   }
 
+  // The body is a bonus, not a requirement. If it will not load -- an old
+  // browser, a blocked CDN, a machine that cannot afford a second model -- the
+  // duel carries on with hands only and the arms fall back to a fixed elbow
+  // hint, which is exactly what they did before this existed.
+  onStage("loading the body model (5.5 MB)");
+  try {
+    poseLandmarker = await withTimeout(
+      PoseLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate: "GPU" },
+        runningMode: "VIDEO",
+        numPoses: 1,
+      }),
+      15000, "GPU pose model load",
+    );
+  } catch (err) {
+    console.warn("[tracker] body model unavailable, hands only:", err.message);
+    poseLandmarker = null;
+  }
+
   onStage("ready");
   running = true;
   detectLoop();
@@ -193,12 +239,22 @@ function detectLoop() {
   // often delivers fewer frames than the display refreshes.
   if (video.currentTime !== lastVideoTime) {
     lastVideoTime = video.currentTime;
+    const now = performance.now();
     try {
-      const result = landmarker.detectForVideo(video, performance.now());
-      applyResult(result);
+      applyResult(landmarker.detectForVideo(video, now));
     } catch {
       // A dropped frame is not an error worth stopping for.
     }
+    // Separately try/caught: a body that fails must not cost us the hands,
+    // which are what the whole game is actually played with.
+    if (poseLandmarker && detections % POSE_EVERY === 0) {
+      try {
+        applyPose(poseLandmarker.detectForVideo(video, now));
+      } catch {
+        // Same again. The last body stands until a new one arrives.
+      }
+    }
+    detections++;
   }
 
   requestAnimationFrame(detectLoop);
@@ -258,6 +314,23 @@ function applyResult(result) {
   frame.at = now;
 }
 
+/**
+ * Un-mirror the body the same way the hands are un-mirrored, then hand it to
+ * pose.js to be split into sides. Nothing downstream should ever see a raw
+ * MediaPipe LEFT_/RIGHT_ index.
+ */
+function applyPose(result) {
+  const body = result?.landmarks?.[0];
+  if (!body) {
+    frame.pose = null;
+    return;
+  }
+  frame.pose = readPose(body.map((p) => ({
+    x: 1 - p.x, y: p.y, z: p.z, visibility: p.visibility,
+  })));
+  if (frame.pose) frame.poseAt = performance.now();
+}
+
 // ─── Read API ─────────────────────────────────────────────────────────────────
 
 /** Latest frame. Never null, never throws. Do not mutate the object you get. */
@@ -269,10 +342,18 @@ export function isReady() {
   return running && landmarker !== null;
 }
 
+/** Whether the body model loaded. False means the arms are on the fixed hint. */
+export function isBodyTracked() {
+  return poseLandmarker !== null;
+}
+
 export function disposeTracker() {
   running = false;
   landmarker?.close?.();
   landmarker = null;
+  poseLandmarker?.close?.();
+  poseLandmarker = null;
+  frame.pose = null;
   const stream = video?.srcObject;
   if (stream) stream.getTracks().forEach((t) => t.stop());
   if (video) video.srcObject = null;
