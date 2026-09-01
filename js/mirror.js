@@ -23,7 +23,7 @@
 import * as THREE from 'three';
 import { buildEnvironment } from './arena/scene.js';
 import { createDuelist } from './arena/duelist.js';
-import { initTracker, getFrame, disposeTracker } from './spell-room/tracker.js';
+import { initTracker, getFrame, disposeTracker, setBodyTracking, bodyTracking } from './spell-room/tracker.js';
 import { fingerCurls, palmBasis, FINGERS } from './spell-room/fingers.js';
 import { loadGLB } from './arena/asset-library.js';
 
@@ -224,7 +224,7 @@ function bar(x, y, width, value, colour) {
   ctx.fillRect(x, y, width * Math.max(0, Math.min(1, value)), 6);
 }
 
-function drawReadout(frame, fps) {
+function drawReadout(frame) {
   const w = innerWidth;
   const h = innerHeight;
   ctx.clearRect(0, 0, w, h);
@@ -233,11 +233,18 @@ function drawReadout(frame, fps) {
 
   ctx.fillStyle = frame.tracked ? GOLD : DIM;
   ctx.fillText(frame.tracked ? `TRACKING · ${(frame.hands ?? []).length} HAND(S)` : 'NO HANDS', 24, 34);
+  // Two rates, and the second is the one that decides whether this looks smooth.
+  // The renderer can sit at 120 while the body steps, because the body only
+  // moves when a detection lands.
   ctx.fillStyle = DIM;
-  ctx.fillText(`${Math.round(fps)} fps · body ${frame.pose ? 'yes' : 'no'}`, 24, 52);
-  ctx.fillText(firstPerson ? 'V · FIRST PERSON' : 'V · ORBIT — drag to turn', 24, 70);
+  ctx.fillText(`${Math.round(rate.fps)} fps drawn`, 24, 52);
+  ctx.fillStyle = rate.hz >= 24 ? GOLD : rate.hz >= 14 ? BLUE : RED;
+  ctx.fillText(`${rate.hz.toFixed(1)} Hz tracked  <- smoothness lives here`, 24, 70);
+  ctx.fillStyle = DIM;
+  ctx.fillText(`B · body model ${bodyTracking() ? 'ON' : 'off'}`, 24, 88);
+  ctx.fillText(firstPerson ? 'V · FIRST PERSON' : 'V · ORBIT — drag to turn', 24, 106);
 
-  let y = 108;
+  let y = 142;
   for (const side of ['right', 'left']) {
     ctx.fillStyle = readout[side] ? BLUE : DIM;
     ctx.fillText(`${side.toUpperCase()} HAND${readout[side] ? '' : ' — not seen'}`, 24, y);
@@ -281,29 +288,46 @@ addEventListener('resize', resize);
 resize();
 
 let last = performance.now();
-let fps = 60;
+
+// Counted over a window, not taken as 1/dt. Instantaneous 1/dt reported 755 fps
+// on a display that cannot show more than 120: two callbacks landing a
+// millisecond apart is not a frame rate, it is a scheduling artefact, and
+// averaging it hides exactly the stall that makes motion look stepped.
+const rate = { frames: 0, detections: 0, since: performance.now(), fps: 0, hz: 0 };
+
+function sampleRates(now, frame) {
+  rate.frames++;
+  const elapsed = now - rate.since;
+  if (elapsed < 500) return;
+  rate.fps = (rate.frames * 1000) / elapsed;
+  rate.hz = ((frame.detections - rate.detections) * 1000) / elapsed;
+  rate.detections = frame.detections;
+  rate.frames = 0;
+  rate.since = now;
+}
 function loop() {
   if (!running) return;
   requestAnimationFrame(loop);
   const now = performance.now();
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  fps += (1 / Math.max(dt, 1e-4) - fps) * 0.08;
 
   updateCamera();
   const frame = getFrame();
+  sampleRates(now, frame);
   if (tracking) driveBody(frame);
   avatar.update(dt);
   // The camera reads the eye, which the update above just moved.
   updateCamera();
 
   renderer.render(scene, camera);
-  drawReadout(frame, fps);
+  drawReadout(frame);
 }
 
 addEventListener('keydown', event => {
   if (event.repeat) return;
   if (event.code === 'KeyV') firstPerson = !firstPerson;
+  if (event.code === 'KeyB') setBodyTracking(!bodyTracking());
 });
 glCanvas.addEventListener('click', () => glCanvas.requestPointerLock());
 addEventListener('mousemove', event => {

@@ -50,7 +50,7 @@ const POSE_MODEL_URL =
 // that an elbow only matters while an arm is up. With no hand in frame there is
 // no arm being solved, so the second model has nothing to contribute and is
 // simply not run. Standing, walking and watching now cost what they always did.
-const TRACK_BODY = true;
+let trackBody = true;
 const POSE_EVERY = 3;
 
 let video = null;
@@ -129,6 +129,11 @@ const frame = {
   // guess; see pose.js.
   pose: null,
   poseAt: 0,
+
+  // How many detections have completed. The render loop runs far faster than
+  // this, and it is THIS rate that decides whether a tracked arm looks smooth
+  // or looks like it is stepping, so it is worth being able to read.
+  detections: 0,
 };
 
 const EMPTY_HANDS = [];
@@ -213,13 +218,6 @@ export async function initTracker(videoEl, onStage = () => {}) {
   // browser, a blocked CDN, a machine that cannot afford a second model -- the
   // duel carries on with hands only and the arms fall back to a fixed elbow
   // hint, which is exactly what they did before this existed.
-  if (!TRACK_BODY) {
-    onStage("ready");
-    running = true;
-    detectLoop();
-    return true;
-  }
-
   onStage("loading the body model (5.5 MB)");
   try {
     poseLandmarker = await withTimeout(
@@ -263,7 +261,7 @@ function detectLoop() {
     }
     // Separately try/caught: a body that fails must not cost us the hands,
     // which are what the whole game is actually played with.
-    if (poseLandmarker && frame.tracked && detections % POSE_EVERY === 0) {
+    if (trackBody && poseLandmarker && frame.tracked && detections % POSE_EVERY === 0) {
       try {
         applyPose(poseLandmarker.detectForVideo(video, now));
       } catch {
@@ -271,6 +269,7 @@ function detectLoop() {
       }
     }
     detections++;
+    frame.detections = detections;
   }
 
   requestAnimationFrame(detectLoop);
@@ -364,6 +363,24 @@ export function isReady() {
 /** Whether the body model loaded. False means the arms are on the fixed hint. */
 export function isBodyTracked() {
   return poseLandmarker !== null;
+}
+
+/**
+ * Turn the body model on and off while running.
+ *
+ * It is the one part of the pipeline whose cost can be felt but whose benefit
+ * cannot easily be seen, so being able to A/B it in place -- rather than by
+ * editing a constant and reloading -- is the only way to settle whether it is
+ * worth what it takes.
+ */
+export function setBodyTracking(enabled) {
+  trackBody = Boolean(enabled);
+  if (!trackBody) frame.pose = null;
+  return trackBody;
+}
+
+export function bodyTracking() {
+  return trackBody && poseLandmarker !== null;
 }
 
 export function disposeTracker() {
