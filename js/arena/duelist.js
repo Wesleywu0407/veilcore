@@ -493,6 +493,18 @@ export function createDuelist(scene, {
   const lastElbow = new THREE.Vector3();
   const _poleHint = new THREE.Vector3();
   const _shoulderWorld = new THREE.Vector3();
+  // The off hand, kept deliberately separate from the block above rather than
+  // folded into a shared per-side record. The right arm carries the rune, the
+  // bow string and the punch, and every one of those has an opinion about when
+  // it may be overridden; the left has none of that. Merging them would put the
+  // duel's most load-bearing arm at risk to give the mirror a second one.
+  let leftReachTarget = null;
+  let leftReachWeight = 0;
+  const lastLeftReach = new THREE.Vector3();
+  let leftElbowTarget = null;
+  const lastLeftElbow = new THREE.Vector3();
+  const _leftPole = new THREE.Vector3();
+  const _leftShoulderWorld = new THREE.Vector3();
   let imported = null;
   let headBone = null;
   let eyeLocal = null;   // the head's REST position in root space, measured at load
@@ -628,6 +640,30 @@ export function createDuelist(scene, {
       }
     },
     get reaching() { return reachWeight > 0.01; },
+    /**
+     * The same as reach(), for the hand that is not the rune hand.
+     *
+     * The duel never calls this: there, the off hand is always busy holding a
+     * bow or a guard, and an arm that also tried to follow a tracked hand would
+     * be fighting whichever pose owns it. The mirror has no poses, so both arms
+     * are free to be the player's.
+     */
+    reachLeft(point, elbow = null) {
+      if (point && Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z)) {
+        leftReachTarget = leftReachTarget ?? new THREE.Vector3();
+        leftReachTarget.copy(point);
+        if (leftReachWeight <= 0.01) lastLeftReach.copy(point);
+      } else {
+        leftReachTarget = null;
+      }
+      if (elbow && Number.isFinite(elbow.x) && Number.isFinite(elbow.y) && Number.isFinite(elbow.z)) {
+        leftElbowTarget = leftElbowTarget ?? new THREE.Vector3();
+        leftElbowTarget.copy(elbow);
+        if (leftReachWeight <= 0.01) lastLeftElbow.copy(elbow);
+      } else {
+        leftElbowTarget = null;
+      }
+    },
     /**
      * World position of the casting hand, or null before the rig has loaded.
      * Handed out because the spell effects have to form AT the hand, and a
@@ -1017,6 +1053,31 @@ export function createDuelist(scene, {
           }
         }
       }
+      // The off hand, on the same terms as the rune hand but with none of its
+      // claimants: it steps aside for the bow and the guard, and otherwise
+      // follows whatever it was given.
+      if (leftIK && leftShoulderLocal) {
+        const wanted = leftReachTarget && drawWeight <= 0.01 && punchWeight <= 0.01 ? 1 : 0;
+        leftReachWeight += (wanted - leftReachWeight) * Math.min(1, dt * REACH_FADE);
+        if (leftReachTarget) {
+          lastLeftReach.lerp(leftReachTarget, Math.min(1, dt * REACH_TRACK));
+          if (!Number.isFinite(lastLeftReach.x) || !Number.isFinite(lastLeftReach.y) || !Number.isFinite(lastLeftReach.z)) {
+            lastLeftReach.copy(leftReachTarget);
+          }
+        }
+        if (leftReachWeight > 0.01) {
+          root.updateMatrixWorld(true);
+          let hint = null;
+          if (leftElbowTarget) {
+            lastLeftElbow.lerp(leftElbowTarget, Math.min(1, dt * REACH_TRACK));
+            _leftPole.copy(lastLeftElbow)
+              .sub(root.localToWorld(_leftShoulderWorld.copy(leftShoulderLocal)));
+            hint = _leftPole;
+          }
+          leftIK.solve(lastLeftReach, leftReachWeight, hint);
+        }
+      }
+
       // The wrist, after the fingers and after the arm IK has put the hand
       // where it goes: this overrides only the hand bone's rotation, so the arm
       // still decides where the hand IS and the palm decides which way it looks.

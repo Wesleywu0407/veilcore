@@ -33,12 +33,20 @@ const DIM = '#7f899f';
 const RED = '#ff9c82';
 
 const DUELIST_URL = 'assets/models/arena/sealed-porcelain-duelist-fingers.glb';
-const DUELIST_CLIPS = [
-  'assets/models/arena/anim-idle.glb',
-  'assets/models/arena/anim-cast.glb',
-  'assets/models/arena/anim-hit.glb',
-  'assets/models/arena/anim-run.glb',
-];
+
+// ── No clips, on purpose ──
+//
+// The duel loads four, and its idle shifts the weight, swings the free arm and
+// turns the torso the whole time. In the duel that reads as a body that is
+// alive. In a mirror it is the opposite of the point: nearly everything moving
+// on screen is then something the player is NOT doing, and there is no way to
+// tell a tracking fault from the animation underneath it.
+//
+// With no clips duelist.js never builds a mixer, so the body holds its bind
+// pose and the only things that move are the ones being tracked. The arm IK,
+// the finger chains and the palm rig are all built before the clip block, so
+// none of them are lost by leaving it empty.
+const DUELIST_CLIPS = [];
 
 // How far in front of the lens the hand is placed. The duel uses 1.47 against a
 // camera parked behind the shoulder; here the camera is the eye itself, so this
@@ -91,15 +99,13 @@ avatar.setPosition(new THREE.Vector3(0, 0, 0));
 let modelReady = false;
 (async () => {
   try {
-    const [{ clone }, gltf, settled] = await Promise.all([
+    const [{ clone }, gltf] = await Promise.all([
       import('three/addons/utils/SkeletonUtils.js'),
       loadGLB(DUELIST_URL),
-      Promise.allSettled(DUELIST_CLIPS.map(clip => loadGLB(clip))),
     ]);
-    const clips = gltf.animations.concat(
-      settled.flatMap(r => (r.status === 'fulfilled' ? r.value.animations : [])),
-    );
-    avatar.replaceVisual(clone(gltf.scene), clips);
+    // Not gltf.animations either: the model carries its own clip, and handing
+    // that over would put the body right back on an animation.
+    avatar.replaceVisual(clone(gltf.scene), []);
     modelReady = true;
   } catch (error) {
     status = `model: ${error.message}`;
@@ -172,13 +178,22 @@ function trackedDirection(v, out) {
 
 function driveBody(frame) {
   const hands = frame.hands ?? [];
-  const drawing = hands.length === 2 ? hands[1] : hands[0] ?? null;
+  const right = hands.find(h => h.side === 'right')
+    ?? (hands.length === 1 && hands[0].side === null ? hands[0] : null);
+  const left = hands.find(h => h.side === 'left') ?? null;
 
+  // Both arms, because a mirror with one live arm and one hanging is not a
+  // mirror. The duel drives only the right; there the left is always holding
+  // something.
   avatar.reach(
-    frame.tracked && drawing ? handTarget(drawing.tip ?? frame.tip) : null,
+    frame.tracked && right ? handTarget(right.tip) : null,
     0,
     false,
     frame.pose?.right ? elbowTarget(frame.pose.right) : null,
+  );
+  avatar.reachLeft(
+    frame.tracked && left ? handTarget(left.tip) : null,
+    frame.pose?.left ? elbowTarget(frame.pose.left) : null,
   );
 
   for (const side of ['left', 'right']) {
@@ -243,8 +258,9 @@ function drawReadout(frame) {
   ctx.fillStyle = DIM;
   ctx.fillText(`B · body model ${bodyTracking() ? 'ON' : 'off'}`, 24, 88);
   ctx.fillText(firstPerson ? 'V · FIRST PERSON' : 'V · ORBIT — drag to turn', 24, 106);
+  ctx.fillText('no idle clip — only what is tracked moves', 24, 124);
 
-  let y = 142;
+  let y = 158;
   for (const side of ['right', 'left']) {
     ctx.fillStyle = readout[side] ? BLUE : DIM;
     ctx.fillText(`${side.toUpperCase()} HAND${readout[side] ? '' : ' — not seen'}`, 24, y);
