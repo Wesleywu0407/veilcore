@@ -31,6 +31,26 @@ const REACH_FADE = 14;
 // arrive at the shoulder unfiltered.
 const REACH_TRACK = 18;
 
+// ── The fingers ──────────────────────────────────────────────────────────────
+//
+// The rig gained a three-bone chain per digit (scripts/rig-fingers). Curling is
+// a rotation about each bone's local X, mirrored between the hands. That is
+// MEASURED, not assumed: rotating each bone in turn and watching which way the
+// fingertip travelled toward the wrist picked X on both hands with opposite
+// signs, and local Y moved the tip by exactly nothing -- Y runs along the bone,
+// which is how the measurement confirmed itself.
+const FINGER_NAMES = ['thumb', 'index', 'middle', 'ring', 'pinky'];
+const FINGER_BONES = ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky'];
+const FINGER_TRACK = 16;          // how fast the hand follows the player's
+const FINGER_FULL = Math.PI / 2;  // a fully bent knuckle
+const FINGER_JOINT = [0.9, 0.75, 0.6];   // knuckle bends most, last joint least
+
+// The ceiling on how far a hand may close, and it is not a style choice: the
+// four fingers share one continuous surface, so the webbing between them
+// stretches as they curl and starts to tear past about here. A closed hand
+// reads fine; a hard knuckled fist does not. See scripts/rig-fingers/README.md.
+const FINGER_MAX_CURL = 0.55;
+
 // ── The draw ─────────────────────────────────────────────────────────────────
 //
 // A drawn bow is a pose that has to track `draw` continuously, which is why it
@@ -195,6 +215,35 @@ function toStandardMaterial(source) {
   return target;
 }
 
+/**
+ * The three-bone chain per digit, with each bone's rest rotation kept beside it.
+ *
+ * The rest quaternion has to be stored: a curl is applied by resetting the bone
+ * and rotating from there, because assigning a Euler outright would throw away
+ * the bind pose the chain was authored in and splay the hand open.
+ *
+ * Returns null on a rig without finger bones, which is a supported state -- the
+ * original 24-bone model still loads and simply never closes its hands.
+ */
+function collectFingerChains(model) {
+  const chains = { left: {}, right: {} };
+  let found = 0;
+  for (const side of ['Left', 'Right']) {
+    for (let f = 0; f < FINGER_BONES.length; f++) {
+      const chain = [];
+      for (let segment = 1; segment <= 3; segment++) {
+        const bone = model.getObjectByName(`${side}Hand${FINGER_BONES[f]}${segment}`);
+        if (bone) chain.push({ bone, rest: bone.quaternion.clone() });
+      }
+      if (chain.length === 3) {
+        chains[side.toLowerCase()][FINGER_NAMES[f]] = chain;
+        found++;
+      }
+    }
+  }
+  return found ? chains : null;
+}
+
 /** The Meshy focus that follows the solved casting wrist. */
 function buildCastFocus(colour) {
   const group = new THREE.Group();
@@ -320,6 +369,18 @@ export function createDuelist(scene, {
   root.add(castFocus.group);
   let chargeGlow = 0;
   let castSparkEnabled = true;
+  // Per hand: the bone chains, their rest rotations, where the player's fingers
+  // are, and where ours have eased to so far.
+  let fingerChains = null;
+  const fingerTarget = { left: {}, right: {} };
+  const fingerLive = { left: {}, right: {} };
+  for (const side of ['left', 'right']) {
+    for (const finger of FINGER_NAMES) {
+      fingerTarget[side][finger] = 0;
+      fingerLive[side][finger] = 0;
+    }
+  }
+  const _fingerAxis = new THREE.Vector3(1, 0, 0);
   const _sparkPos = new THREE.Vector3();
   const _reachLocal = new THREE.Vector3();
   const _bowHand = new THREE.Vector3();
@@ -398,6 +459,22 @@ export function createDuelist(scene, {
       hips.visible = true;
     },
     attachCastFocus(model) { castFocus.attach(model); },
+    get hasFingers() { return fingerChains !== null; },
+    /**
+     * How closed each finger is, 0 open and 1 shut, for one hand.
+     *
+     * Takes a whole hand at once for the same reason drawBow() takes a pose:
+     * fingers are read together from one set of landmarks, and a caller able to
+     * set them one at a time could leave four of them stale. Pass null when the
+     * hand is not being tracked, which opens it again.
+     */
+    fingers(side, curls) {
+      const target = fingerTarget[side === 'left' ? 'left' : 'right'];
+      for (const finger of FINGER_NAMES) {
+        const value = curls ? curls[finger] : 0;
+        target[finger] = Number.isFinite(value) ? clamp(value, 0, 1) : 0;
+      }
+    },
     setPosition(position) { root.position.copy(position); },
     face(direction) {
       // Record the intent only. Assigning rotation.y here teleported the duelist
@@ -570,6 +647,7 @@ export function createDuelist(scene, {
       if (imported) imported.removeFromParent();
       imported = model;
       imported.name = `${name} Meshy model`;
+      fingerChains = collectFingerChains(imported);
       imported.traverse(object => {
         if (!object.isMesh) return;
         object.castShadow = castShadow;
@@ -780,6 +858,28 @@ export function createDuelist(scene, {
           // the first one written through to matrixWorld, or it aims off a
           // stale pose. Same reason the draw does it.
           root.updateMatrixWorld(true);
+        }
+      }
+
+      // Fingers, after the mixer like everything else. No clip animates these
+      // bones, so nothing overwrites them -- but keeping the order the same as
+      // the arms means there is one rule about when the rig is safe to touch
+      // rather than two.
+      if (fingerChains) {
+        for (const side of ['left', 'right']) {
+          const sign = side === 'right' ? 1 : -1;
+          for (const finger of FINGER_NAMES) {
+            const chain = fingerChains[side][finger];
+            if (!chain) continue;
+            const live = fingerLive[side];
+            live[finger] += (fingerTarget[side][finger] - live[finger]) * Math.min(1, dt * FINGER_TRACK);
+            const curl = live[finger] * FINGER_MAX_CURL * sign;
+            for (let segment = 0; segment < chain.length; segment++) {
+              const { bone, rest } = chain[segment];
+              bone.quaternion.copy(rest);
+              bone.rotateOnAxis(_fingerAxis, FINGER_FULL * FINGER_JOINT[segment] * curl);
+            }
+          }
         }
       }
 

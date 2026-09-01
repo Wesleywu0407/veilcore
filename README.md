@@ -252,6 +252,7 @@ Open:
 | `js/spell-room/boxing.js` | fists: the wrist roll that picks the stance, and the punch |
 | `js/spell-room/magic.js` | pinch gate, stroke recording, rune recognition |
 | `js/spell-room/tracker.js` | webcam and MediaPipe |
+| `js/spell-room/fingers.js` | how closed each finger is, from the landmarks |
 | `js/spell-room/one-euro.js` | the smoothing filter on the tracked points |
 
 Balance lives entirely in `js/arena/config.js`. Change numbers there, not at the
@@ -280,8 +281,19 @@ by editing the GLBs directly. If you regenerate them, you have to redo this:
   one sinks its toes through the floor and depicts a body moving at 2.8 units/s
   while the game moves at 5.5, which is what foot-sliding looks like.
 
-The rig has **no finger bones** — `LeftHand`/`RightHand` are terminal. The arm
-can trace a rune; the fingers cannot curl. Meshy cannot add them.
+The rig as Meshy delivered it has **no finger bones** — `LeftHand`/`RightHand`
+are terminal, so the arm can trace a rune but the hand is one rigid lump. Meshy
+will not add them: run against this exact mesh, its rigging API returned the
+same 24-bone template, decimated the mesh from 24,904 triangles to 170, and
+dropped two of the three PBR maps.
+
+`sealed-porcelain-duelist-fingers.glb` is that same model with 30 finger bones
+added locally in Blender — same geometry, same textures, same 24 animated bone
+names, so all four clips still bind. The duel loads this one;
+`sealed-porcelain-duelist.glb` is kept beside it untouched. See
+`scripts/rig-fingers/` for the pipeline and, importantly, for the curl ceiling:
+the four fingers share one surface, so a hand may close to about 0.55 of a fist
+before the webbing between them tears.
 
 The small effects under `assets/models/arena/vfx/` are deliberately separate
 from the repaired character pipeline. They are Smart Topology GLBs with one
@@ -293,7 +305,7 @@ the game. None of these effects casts a shadow.
 ## Tests
 
 ```bash
-npm run test         # 80 tests, no camera needed
+npm run test         # 103 tests, no camera needed
 npm run runes        # how far apart the rune shapes sit
 npm run assets       # triangles, textures, download size and VRAM per GLB
 ```

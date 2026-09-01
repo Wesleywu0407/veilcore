@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { buildArena, buildEnvironment } from './arena/scene.js';
 import { DUEL } from './arena/config.js';
 import { createDuelist } from './arena/duelist.js';
+import { fingerCurls } from './spell-room/fingers.js';
 import { createOpponentController } from './arena/opponent.js';
 import { createSpellSystem } from './arena/spell-system.js';
 import { createPerformanceGovernor } from './arena/performance.js';
@@ -159,7 +160,10 @@ async function loadArenaProps() {
 }
 
 async function loadMeshyDuelists() {
-  const url = 'assets/models/arena/sealed-porcelain-duelist.glb';
+  // The finger-boned rig. Same mesh, same textures, same 24 animated bones --
+  // 30 finger bones added on top. scripts/rig-fingers made it; the original is
+  // kept beside it untouched.
+  const url = 'assets/models/arena/sealed-porcelain-duelist-fingers.glb';
   try {
     const [{ clone }, gltf, settled] = await Promise.all([
       import('three/addons/utils/SkeletonUtils.js'),
@@ -1231,6 +1235,7 @@ function updateHand(now) {
     !ringfallCharging,
     elbowTarget(frame.pose?.right),
   );
+  driveFingers(frame);
   playerCharging = cast.phase === 'charging';
   // The ring forms at the hand while the charge is held, and only then goes.
   // Ringfall only: Aegis and Gravity Seal are not this shape and borrowing the
@@ -1586,6 +1591,28 @@ function elbowTarget(arm) {
   _elbowTarget.set(elbow.x * 2 - 1, -(elbow.y * 2 - 1), 0.5).unproject(castCamera);
   return _elbowTarget.sub(castCamera.position).normalize()
     .multiplyScalar(HAND_DEPTH).add(castCamera.position);
+}
+
+// What the player's own fingers are doing, handed to the duelist's hands.
+//
+// Sides come from `frame.hands`, which decides them by x position rather than
+// by MediaPipe's handedness label -- the webcam mirrors, so the label is the
+// wrong way round. Same rule the archery stance follows.
+//
+// A hand that is not being tracked opens rather than freezing, because a hand
+// held shut by a dropout is a hand the player cannot see themselves controlling.
+const _curls = { left: {}, right: {} };
+
+function driveFingers(frame) {
+  if (!playerAvatar.hasFingers) return;
+  const hands = frame.hands ?? [];
+  for (const side of ['left', 'right']) {
+    const hand = hands.find(h => h.side === side)
+      // One hand alone has no side to compare against, so `frame.hands` leaves
+      // it null. It is the drawing hand, which is the right one.
+      ?? (hands.length === 1 && hands[0].side === null && side === 'right' ? hands[0] : null);
+    playerAvatar.fingers(side, hand ? fingerCurls(hand.landmarks, _curls[side]) : null);
+  }
 }
 
 // The fists, on the glass. Deliberately quiet: unlike the bow there is nothing
