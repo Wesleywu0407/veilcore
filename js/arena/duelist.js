@@ -150,6 +150,51 @@ function withoutArms(clip, which) {
  * internals; movement, hit detection, team colour, and animation calls stay
  * behind the same object.
  */
+/**
+ * Meshy ships the duelist with KHR_materials_specular and KHR_materials_ior, so
+ * GLTFLoader builds a MeshPhysicalMaterial -- and then every extension that
+ * material pays for is switched off: clearcoat, sheen, transmission,
+ * iridescence, anisotropy and thickness all read zero.
+ *
+ * Measured, the saving is small: the two compiled programs differ by exactly
+ * one define, PHYSICAL against STANDARD, which costs a few ALU ops per fragment
+ * for the IOR-derived F0. This is a tidy-up, not the fix for a frame rate
+ * problem -- it is here because a material type should say what it does.
+ *
+ * The white emissive and its map are copied across deliberately. They are the
+ * reason the character reads as it does on screen; dropping them is a look
+ * change, not an optimisation, and belongs in its own commit.
+ */
+function toStandardMaterial(source) {
+  if (!source.isMeshPhysicalMaterial) return source.clone();
+  const target = new THREE.MeshStandardMaterial({
+    color: source.color,
+    map: source.map,
+    roughness: source.roughness,
+    roughnessMap: source.roughnessMap,
+    metalness: source.metalness,
+    metalnessMap: source.metalnessMap,
+    normalMap: source.normalMap,
+    normalMapType: source.normalMapType,
+    normalScale: source.normalScale,
+    aoMap: source.aoMap,
+    aoMapIntensity: source.aoMapIntensity,
+    emissive: source.emissive,
+    emissiveMap: source.emissiveMap,
+    emissiveIntensity: source.emissiveIntensity,
+    alphaMap: source.alphaMap,
+    envMapIntensity: source.envMapIntensity,
+    transparent: source.transparent,
+    opacity: source.opacity,
+    alphaTest: source.alphaTest,
+    side: source.side,
+    flatShading: source.flatShading,
+    vertexColors: source.vertexColors,
+  });
+  target.name = source.name;
+  return target;
+}
+
 /** The Meshy focus that follows the solved casting wrist. */
 function buildCastFocus(colour) {
   const group = new THREE.Group();
@@ -508,7 +553,7 @@ export function createDuelist(scene, {
         if (!object.isMesh) return;
         object.castShadow = castShadow;
         object.receiveShadow = true;
-        if (object.material) object.material = object.material.clone();
+        if (object.material) object.material = toStandardMaterial(object.material);
       });
       // Box3.setFromObject() reaches SkinnedMesh.computeBoundingBox(), which
       // evaluates the skin through the bones' matrixWorld -- and caches the
