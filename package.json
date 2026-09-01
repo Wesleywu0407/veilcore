@@ -10,6 +10,7 @@
     "dev:https": "node scripts/duel-server.mjs --https",
     "share": "node scripts/share-duel.mjs",
     "test": "node --test tests/*.test.mjs",
-    "runes": "node scripts/rune-distance.mjs"
+    "runes": "node scripts/rune-distance.mjs",
+    "assets": "node scripts/glb-info.mjs"
   }
 }

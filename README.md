@@ -295,6 +295,7 @@ the game. None of these effects casts a shadow.
 ```bash
 npm run test         # 80 tests, no camera needed
 npm run runes        # how far apart the rune shapes sit
+npm run assets       # triangles, textures, download size and VRAM per GLB
 ```
 
 The recogniser is tested against synthetic shaky-hand input, so you can tell
