@@ -37,12 +37,17 @@ const MODEL_URL =
 const POSE_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
 
-// The body runs at half the hands' rate. An elbow travels a fraction of the
-// distance a fingertip does, and the IK eases toward the hint anyway, so the
-// second model does not need to be paid for on every detection. Raise it to 1
-// if the arms feel laggy, lower the hands instead if the frame rate suffers --
-// but measure before either, on the machine that has the camera.
-const POSE_EVERY = 2;
+// The body runs at a quarter of the hands' rate. An elbow travels a fraction of
+// the distance a fingertip does and the IK eases toward the hint anyway, so the
+// second model does not need paying for on every detection.
+//
+// 2 was the first guess, made without a camera to measure on. With one attached
+// the quality governor dropped the duel to `low`, which is the renderer being
+// starved by the detect loop rather than by anything it draws. 4 halves that
+// cost again. Raise it if the arms feel laggy; if the frame rate still suffers
+// at 4, the body is not what is costing it and the hands should be looked at
+// instead.
+const POSE_EVERY = 4;
 
 let video = null;
 let landmarker = null;

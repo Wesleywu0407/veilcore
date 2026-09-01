@@ -963,7 +963,19 @@ const _bowLook = new THREE.Vector3();
 const castCamera = new THREE.PerspectiveCamera(CAST_FOV, 1, 0.1, 180);
 
 function updateCamera(dt) {
-  const eyeMode = bowMode || fistMode || forcedEye;
+  // Two different first-person cameras, and they are not interchangeable.
+  //
+  // A stance -- bow or fists -- gets the choreographed move: body, then arm,
+  // then bow, then downrange. Those middle beats aim at the bow hand and elbow
+  // on purpose, because the point is to watch the weapon come up.
+  //
+  // V gets none of that. Without a bow in hand `bowHandWorld()` hands back the
+  // SHOULDER, so running the same move puts the lens on the eye and points it
+  // at the inside of the duelist's own chest, half a metre away. It flew
+  // through the body and stared at solid geometry.
+  const stanceEye = bowMode || fistMode;
+  const plainEye = forcedEye && !stanceEye;
+  const eyeMode = stanceEye || plainEye;
   const wantCast = playerAvatar.reaching && !eyeMode ? 1 : 0;
   const wantBow = eyeMode ? 1 : 0;
   castFraming += (wantCast - castFraming) * Math.min(1, dt * 9);
@@ -1007,10 +1019,20 @@ function updateCamera(dt) {
   // you cannot aim, so the move ends by lifting off the bow and looking out
   // over it -- which is what leaves the bow sitting low and to the left, held
   // in the left hand, exactly where an archer's own bow sits.
-  _bowLook.copy(_chaseLook)
-    .lerp(_bowElbow, stage(bowFraming, BEAT_ELBOW))
-    .lerp(_bowHand, stage(bowFraming, BEAT_BOW))
-    .lerp(_downrange.copy(_bowPos).addScaledVector(_flat, 12), stage(bowFraming, BEAT_DOWNRANGE));
+  if (plainEye) {
+    // Straight out of the eye, no beats and no body parts on the way. Aimed
+    // along _forward rather than _flat, so that looking up and down with the
+    // mouse actually tilts the view -- the stance move deliberately stays level
+    // because an archer's horizon should not roll, but a head that cannot look
+    // up is not a first-person camera at all.
+    _downrange.copy(_bowPos).addScaledVector(_forward, 12);
+    _bowLook.copy(_chaseLook).lerp(_downrange, smooth(bowFraming));
+  } else {
+    _bowLook.copy(_chaseLook)
+      .lerp(_bowElbow, stage(bowFraming, BEAT_ELBOW))
+      .lerp(_bowHand, stage(bowFraming, BEAT_BOW))
+      .lerp(_downrange.copy(_bowPos).addScaledVector(_flat, 12), stage(bowFraming, BEAT_DOWNRANGE));
+  }
 
   // A slightly wider lens while casting, to keep the whole drawing arc in frame
   // from this much closer camera.
