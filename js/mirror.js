@@ -51,22 +51,13 @@ const DUELIST_CLIPS = [];
 // How far in front of the lens the hand is placed. The duel uses 1.47 against a
 // camera parked behind the shoulder; here the camera is the eye itself, so this
 // is a real arm's reach from a real eye and nothing cancels out.
-// ── Where a tracked hand goes, in the BODY's space and not the viewer's ──
-//
-// The hand used to be unprojected through the orbit camera and parked a fixed
-// distance in front of it. That put the target out in the air between the
-// viewer and the duelist -- and worse, it made the hand orbit with the camera,
-// so turning to look at the body from the side dragged the arm around with it.
-// A mirror cannot do that: the reflection has to belong to the body, not to
-// wherever you happen to be standing.
-//
-// So the picture maps onto a box hung in front of the duelist's own chest.
-// Fractions of its height, so a character rebuilt at a different scale still
-// reaches the same way.
-const REACH_ACROSS = 0.42;   // half-width of the box, side to side
-const REACH_RISE = 0.34;     // half-height, measured about the shoulder line
-const REACH_SHOULDER = 0.82; // up the body, where that box is centred
-const REACH_FORWARD = 0.26;  // out in front of the chest
+// Where a tracked hand goes is duelist.js's business now -- see reachBox().
+// It was briefly done here, off the viewing camera, which meant the hand sat in
+// the air between you and the reflection and swung round every time the orbit
+// moved. Then it was done here off the body, which fixed that but sized the box
+// from the character's HEIGHT: the far corners came out at twice the arm's
+// length, so most of the picture mapped somewhere the hand could not go and
+// only the middle of the frame still moved anything.
 const EYE_AHEAD = 0.30;    // clears the porcelain helm, same as the duel
 const ORBIT_DISTANCE = 3.6;
 const ORBIT_HEIGHT = 2.4;
@@ -171,17 +162,8 @@ const _along = { left: new THREE.Vector3(), right: new THREE.Vector3() };
 const _across = { left: new THREE.Vector3(), right: new THREE.Vector3() };
 
 /** Straight through the one camera, at a fixed depth. */
-function handTarget(tip) {
-  const height = avatar.height;
-  // Negated across: the tracker hands back x already un-mirrored, so the
-  // player's right hand carries the LARGER x, while the duelist's own local +X
-  // is its left. Without the flip the reflection reaches across itself.
-  _handTarget.set(
-    -(tip.x - 0.5) * 2 * REACH_ACROSS * height,
-    (REACH_SHOULDER + (0.5 - tip.y) * 2 * REACH_RISE) * height,
-    REACH_FORWARD * height,
-  );
-  return avatar.root.localToWorld(_handTarget);
+function handTarget(side, tip) {
+  return avatar.reachBox(side, tip.x, tip.y, _handTarget);
 }
 
 // Same mirror correction the duel makes, and for the same reason: tracker.js
@@ -208,14 +190,14 @@ function driveBody(frame) {
   // mirror. The duel drives only the right; there the left is always holding
   // something.
   avatar.reach(
-    frame.tracked && right ? handTarget(right.tip) : null,
+    frame.tracked && right ? handTarget('right', right.tip) : null,
     0,
     false,
-    frame.pose?.right ? elbowTarget(frame.pose.right) : null,
+    frame.pose?.right ? elbowTarget('right', frame.pose.right) : null,
   );
   avatar.reachLeft(
-    frame.tracked && left ? handTarget(left.tip) : null,
-    frame.pose?.left ? elbowTarget(frame.pose.left) : null,
+    frame.tracked && left ? handTarget('left', left.tip) : null,
+    frame.pose?.left ? elbowTarget('left', frame.pose.left) : null,
   );
 
   for (const side of ['left', 'right']) {
@@ -245,17 +227,11 @@ function driveBody(frame) {
 }
 
 const _elbow = new THREE.Vector3();
-function elbowTarget(arm) {
+function elbowTarget(side, arm) {
   if (!arm?.elbow) return null;
-  // Through the same box as the hand, or the bend hint would be describing a
-  // point in a different space from the wrist it is meant to bend toward.
-  const height = avatar.height;
-  _elbow.set(
-    -(arm.elbow.x - 0.5) * 2 * REACH_ACROSS * height,
-    (REACH_SHOULDER + (0.5 - arm.elbow.y) * 2 * REACH_RISE) * height,
-    REACH_FORWARD * height,
-  );
-  return avatar.root.localToWorld(_elbow);
+  // The same box as the hand, or the bend hint describes a point in a different
+  // space from the wrist it is meant to bend toward.
+  return avatar.reachBox(side, arm.elbow.x, arm.elbow.y, _elbow);
 }
 
 // ─── Readout ──────────────────────────────────────────────────────────────────

@@ -56,6 +56,19 @@ const FINGER_MAX_CURL = 0.55;
 // reads as a fast hand.
 const PALM_TRACK = 11;
 
+// ── The box a tracked hand is mapped onto ──
+//
+// Fractions of the rig's own measured arm, centred on the shoulder that has to
+// reach it -- not on the body's centre line, because the reachable envelope is
+// a sphere about the shoulder and nothing else.
+//
+// The corner is what sizes these: sqrt(0.62^2 + 0.62^2 + 0.30^2) = 0.93 of the
+// arm, which lands just inside the 0.908 soft-elbow margin the draw and punch
+// poses are held at. Bigger and the far corners of the picture are simply
+// unreachable -- the IK clamps, the hand stops moving before the player's does,
+// and only the middle of the frame still maps to anything.
+const REACH_BOX = { across: 0.62, rise: 0.62, forward: 0.30 };
+
 // ── The draw ─────────────────────────────────────────────────────────────────
 //
 // A drawn bow is a pose that has to track `draw` continuously, which is why it
@@ -650,6 +663,31 @@ export function createDuelist(scene, {
       }
     },
     get reaching() { return reachWeight > 0.01; },
+    /**
+     * Map a point in the tracked picture onto the body's own reach.
+     *
+     * `u`,`v` are 0..1 image coordinates with v running DOWN, as the tracker
+     * hands them over. Returns a world point, or null before the rig has loaded
+     * and the shoulder has been measured.
+     *
+     * This lives here rather than in the caller because the numbers it needs --
+     * where the shoulder sits, how long the arm is -- are measured off the rig
+     * at load. A caller working in world units would have to be retuned by hand
+     * every time the character is rebuilt at a different scale.
+     */
+    reachBox(side, u, v, out) {
+      const shoulder = side === 'left' ? leftShoulderLocal : shoulderLocal;
+      if (!shoulder || !(armReach > 0)) return null;
+      // u past the middle is the player's right, and the duelist's own local +X
+      // is its LEFT, so the across term subtracts. The same expression serves
+      // both hands because each is measured from its own shoulder.
+      out.set(
+        shoulder.x - (u - 0.5) * 2 * REACH_BOX.across * armReach,
+        shoulder.y + (0.5 - v) * 2 * REACH_BOX.rise * armReach,
+        shoulder.z + REACH_BOX.forward * armReach,
+      );
+      return root.localToWorld(out);
+    },
     /**
      * The same as reach(), for the hand that is not the rune hand.
      *
