@@ -134,8 +134,14 @@ the keyboard too.
 | **J** | cast the selected rune, weakly (0.3 charge) |
 | **K** | cast it at full charge |
 | **Tab** | switch target between the rival and its core |
+| **V** | hold first person, to look down your own arm |
 | **H** | turn hand tracking on or off, without reloading |
 | **R** | next round, once the match has finished |
+
+The camera normally decides for itself: it sits behind you, swings over your
+shoulder while you draw a rune, and goes to your own eye whenever the bow or the
+fists come up. **V** holds it at the eye regardless — which is the only way to
+watch your own hand while casting one-handed, and it works with no webcam at all.
 
 Raise **one hand** to cast runes. Raise **both hands** for one of the two
 two-handed stances, and roll your wrists to say which:

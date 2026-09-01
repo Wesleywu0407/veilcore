@@ -731,6 +731,10 @@ addEventListener('keydown', event => {
   keys.add(event.code);
   if (event.repeat) return;
   if (event.code === 'KeyH') void toggleTracking();
+  if (event.code === 'KeyV') {
+    forcedEye = !forcedEye;
+    setStatus(forcedEye ? 'first person — V to come out' : 'third person');
+  }
   if (event.code === 'Digit1') selectedRuneId = 'ringfall';
   if (event.code === 'Digit2') selectedRuneId = 'aegis';
   if (event.code === 'Digit3') selectedRuneId = 'gravity-seal';
@@ -786,6 +790,11 @@ function shortAngle(from, to) {
 // Stepped rather than held, because a pose is judged by parking it at a value
 // and looking, not by watching it flash past. The real driver is continuous.
 const DRAW_STEP = 0.1;
+// Held first person. The camera normally decides for itself -- it goes to the
+// eye whenever the bow or the fists come up -- but that only ever happens with
+// a camera attached and both hands committed to something. V is the way to look
+// down your own arm while casting one-handed, or with no webcam at all.
+let forcedEye = false;
 let debugBow = false;
 let debugDraw = 0;
 let debugSide = 'right';
@@ -954,7 +963,7 @@ const _bowLook = new THREE.Vector3();
 const castCamera = new THREE.PerspectiveCamera(CAST_FOV, 1, 0.1, 180);
 
 function updateCamera(dt) {
-  const eyeMode = bowMode || fistMode;
+  const eyeMode = bowMode || fistMode || forcedEye;
   const wantCast = playerAvatar.reaching && !eyeMode ? 1 : 0;
   const wantBow = eyeMode ? 1 : 0;
   castFraming += (wantCast - castFraming) * Math.min(1, dt * 9);
@@ -1604,6 +1613,20 @@ function elbowTarget(arm) {
 const _curls = { left: {}, right: {} };
 const _palmAlong = { left: new THREE.Vector3(), right: new THREE.Vector3() };
 const _palmAcross = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+// ── The palm arrives mirrored, and this is where it is put back ──
+//
+// tracker.js un-mirrors x once on the way in, which is right for POSITION: it
+// is what makes the tracked point sit under the hand you can see in the selfie.
+// But negating one axis also flips the CHIRALITY of the landmark cloud, and a
+// palm frame is chirality-sensitive in a way a position is not -- so the wrist
+// came out rolling the opposite way to the player's.
+//
+// -1 mirrors it back. If the palm ever rolls the wrong way again, this is the
+// one number to flip, and the check takes five seconds: hold a palm at the lens
+// and turn it over. Deliberately NOT applied inside tracker.js, because every
+// other consumer wants the un-mirrored x it already gets.
+const PALM_HANDEDNESS = -1;
+
 const _camRight = new THREE.Vector3();
 const _camUp = new THREE.Vector3();
 const _camForward = new THREE.Vector3();
@@ -1620,7 +1643,7 @@ function trackedDirection(v, out) {
   castCamera.matrixWorld.extractBasis(_camRight, _camUp, _camForward);
   // extractBasis gives the camera's +Z, which points BEHIND a three.js camera.
   return out.set(0, 0, 0)
-    .addScaledVector(_camRight, v.x)
+    .addScaledVector(_camRight, v.x * PALM_HANDEDNESS)
     .addScaledVector(_camUp, -v.y)
     .addScaledVector(_camForward, -v.z)
     .normalize();
