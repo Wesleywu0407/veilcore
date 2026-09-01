@@ -326,6 +326,7 @@ export function createDuelist(scene, {
   const _stringHand = new THREE.Vector3();
   const _nock = new THREE.Vector3();
   const _fist = new THREE.Vector3();
+  const _bowWrist = new THREE.Vector3();
   // A stable body-space parent for the bow mesh. Following the solved wrist
   // position without inheriting the terminal hand bone's twist keeps the limbs
   // vertical and the arrow aligned with the duelist's forward axis.
@@ -722,13 +723,21 @@ export function createDuelist(scene, {
         );
         _stringHand.lerpVectors(_nock, _stringHand, lastDraw.draw);
 
-        bowAnchor.position.copy(_bowHand);
-
         // Solved, then re-read: the second solve needs the first arm's bones to
         // have been written through to matrixWorld, or it aims at a stale pose.
         bowIK.solve(root.localToWorld(_bowHand), drawWeight);
         root.updateMatrixWorld(true);
         stringIK.solve(root.localToWorld(_stringHand), drawWeight);
+        root.updateMatrixWorld(true);
+
+        // Hang the bow off the hand that is actually there, not off the point
+        // the hand was asked to reach. solve() blends toward its target by
+        // `drawWeight`, so while the pose is fading in and out the wrist is
+        // only part of the way -- and the bow, pinned to the full target, slid
+        // through the air ahead of the hand that was supposed to be holding it.
+        // Reading the bone back costs one getWorldPosition and cannot drift,
+        // whatever the solver does with an unreachable request.
+        bowAnchor.position.copy(root.worldToLocal(bowIK.bones.wrist.getWorldPosition(_bowWrist)));
       }
 
       punchWeight += ((punchPose ? 1 : 0) - punchWeight) * Math.min(1, dt * PUNCH_POSE.fade);
