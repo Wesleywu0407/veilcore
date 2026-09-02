@@ -133,7 +133,11 @@ let modelReady = false;
 // ─── Camera ───────────────────────────────────────────────────────────────────
 
 let firstPerson = false;
-let orbitYaw = Math.PI;      // start looking at the duelist's front
+// Start BEHIND the character, over its shoulder, because that is the view the
+// tracking is true in: standing behind someone, their right hand is on your
+// right. Facing them it is on your left, and a body that copies you same-side
+// then reads as reversed no matter how correct the bones underneath it are.
+let orbitYaw = 0;
 let orbitPitch = -0.05;
 const _eye = new THREE.Vector3();
 const _forward = new THREE.Vector3();
@@ -173,40 +177,62 @@ const _camBack = new THREE.Vector3();
 const _along = { left: new THREE.Vector3(), right: new THREE.Vector3() };
 const _across = { left: new THREE.Vector3(), right: new THREE.Vector3() };
 
-/** Straight through the one camera, at a fixed depth. */
+/** Straight through the one camera, at a fixed depth. Raw x -- see unflip(). */
 function handTarget(side, tip) {
-  return avatar.reachBox(side, tip.x, tip.y, _handTarget);
+  return avatar.reachBox(side, 1 - tip.x, tip.y, _handTarget);
 }
 
 // A scratch for turning a body-space direction into a world one.
 const _origin = new THREE.Vector3();
 
-// Which of the duelist's arms each of the player's hands drives.
+// ── The tracker hands out a MIRROR WORLD, and a mirror world has no chirality ──
 //
-// Crossed, because that is what a reflection is: raise your right hand at a
-// mirror and the reflection raises its left. Driving the same-side arm needs a
-// reflection to line up, and a bone rotation cannot express one -- that is the
-// whole reason the palm was arriving upside down and the hand going the wrong
-// way across the screen. One crossing fixes both.
-const MIRRORED = Object.freeze({ right: 'left', left: 'right' });
+// tracker.js flips x (`1 - x`) on every landmark, so a hand held out to the
+// player's right arrives on the right of the picture. That is the selfie
+// convention, and it is the right one for something you look AT. It is also a
+// reflection: a reflected right hand is congruent to a LEFT hand, so every
+// basis built from those landmarks comes out inside out. The -1 the duel
+// carries in PALM_HANDEDNESS is what has been paying that bill.
+//
+// This is not a mirror in that sense. The character is the player seen from
+// BEHIND -- raise your right hand and its right hand goes up -- so the map from
+// the one body to the other is the identity, and the flip is pure damage. Undo
+// it once, here at the door, and everything below reads a faithful room.
+//
+// Points un-flip as `1 - x`; directions would un-flip as `-x`. Only points are
+// un-flipped, and palmBasis() derives its directions from those, so the file
+// has one rule to keep straight instead of two.
+const _raw = [];
+function unflip(landmarks) {
+  for (let i = 0; i < landmarks.length; i++) {
+    const p = landmarks[i];
+    const q = (_raw[i] ??= { x: 0, y: 0, z: 0 });
+    q.x = 1 - p.x; q.y = p.y; q.z = p.z;
+  }
+  _raw.length = landmarks.length;
+  return _raw;
+}
 
 /**
- * A direction in the picture, pointed the same way in the BODY's space.
+ * A direction in the raw picture, pointed the same way in the BODY's space.
  *
  * It used to go through the viewing camera, which was left over from before the
  * hand target moved into body space -- so the palm turned when you orbited and
  * the hand did not. Two halves of one gesture in two different frames.
  *
- * The mapping, with the duelist facing the viewer and its arms crossed to the
- * player's (see driveBody):
+ * The mapping, from un-flipped camera space to the duelist's local axes:
  *
- *   image +x  player's right   -> the duelist's left, which is local +X
- *   image +y  down the picture -> down the body,       local -Y
- *   image +z  away from lens   -> behind the duelist,  local -Z
+ *   raw +x  the camera's right -> the player's LEFT, so the body's,  local +X
+ *   raw +y  down the picture   -> down the body,                     local -Y
+ *   raw +z  away from the lens -> behind the player, so the body's,  local -Z
  *
- * Note the determinant: (+1)(-1)(-1) = +1. It is a ROTATION. Driving the
- * same-side arm instead would need (-1)(-1)(-1) = -1, a reflection, which is
- * why the palm came out upside down before the arms were crossed.
+ * Note the determinant: (+1)(-1)(-1) = +1. It is a ROTATION, which is the whole
+ * point: a det -1 map turns palmBasis's right-handed triple into a left-handed
+ * one, and the rotation pulled out of that is not a rotation of anything real.
+ *
+ * With the tracker's FLIPPED x, the signs that point the same physical way are
+ * (-1)(-1)(-1) = -1. That is the reflection, and it is why the palm kept
+ * arriving upside down: not one sign to hunt for, a whole flipped room.
  */
 function trackedDirection(v, out) {
   out.set(v.x, -v.y, -v.z).normalize();
@@ -222,39 +248,41 @@ function driveBody(frame) {
   // Both arms, because a mirror with one live arm and one hanging is not a
   // mirror. The duel drives only the right; there the left is always holding
   // something.
-  // reach() drives the duelist's RIGHT arm, so the player's LEFT hand feeds it.
+  // Same side throughout: reach() drives the duelist's RIGHT arm, and the
+  // player's RIGHT hand is what feeds it.
   avatar.reach(
-    frame.tracked && left ? handTarget('right', left.tip) : null,
+    frame.tracked && right ? handTarget('right', right.tip) : null,
     0,
     false,
-    frame.pose?.left ? elbowTarget('right', frame.pose.left) : null,
+    frame.pose?.right ? elbowTarget('right', frame.pose.right) : null,
   );
   avatar.reachLeft(
-    frame.tracked && right ? handTarget('left', right.tip) : null,
-    frame.pose?.right ? elbowTarget('left', frame.pose.right) : null,
+    frame.tracked && left ? handTarget('left', left.tip) : null,
+    frame.pose?.left ? elbowTarget('left', frame.pose.left) : null,
   );
 
   for (const side of ['left', 'right']) {
     const hand = hands.find(h => h.side === side)
       ?? (hands.length === 1 && hands[0].side === null && side === 'right' ? hands[0] : null);
     if (!hand) {
-      avatar.fingers(MIRRORED[side], null);
-      avatar.palm(MIRRORED[side], null, null);
+      avatar.fingers(side, null);
+      avatar.palm(side, null, null);
       readout[side] = null;
       continue;
     }
-    const curl = fingerCurls(hand.landmarks, curls[side]);
-    avatar.fingers(MIRRORED[side], curl);
+    const raw = unflip(hand.landmarks);
+    const curl = fingerCurls(raw, curls[side]);
+    avatar.fingers(side, curl);
 
-    const basis = palmBasis(hand.landmarks);
+    const basis = palmBasis(raw);
     if (basis) {
       avatar.palm(
-        MIRRORED[side],
+        side,
         trackedDirection(basis.along, _along[side]),
         trackedDirection(basis.across, _across[side]),
       );
     } else {
-      avatar.palm(MIRRORED[side], null, null);
+      avatar.palm(side, null, null);
     }
     readout[side] = { curl: { ...curl }, palm: Boolean(basis) };
   }
@@ -263,9 +291,9 @@ function driveBody(frame) {
 const _elbow = new THREE.Vector3();
 function elbowTarget(side, arm) {
   if (!arm?.elbow) return null;
-  // The same box as the hand, or the bend hint describes a point in a different
-  // space from the wrist it is meant to bend toward.
-  return avatar.reachBox(side, arm.elbow.x, arm.elbow.y, _elbow);
+  // The same box as the hand, and the same raw x, or the bend hint describes a
+  // point in a different space from the wrist it is meant to bend toward.
+  return avatar.reachBox(side, 1 - arm.elbow.x, arm.elbow.y, _elbow);
 }
 
 // ─── Readout ──────────────────────────────────────────────────────────────────

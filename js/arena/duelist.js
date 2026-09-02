@@ -686,14 +686,14 @@ export function createDuelist(scene, {
     reachBox(side, u, v, out) {
       const shoulder = side === 'left' ? leftShoulderLocal : shoulderLocal;
       if (!shoulder || !(armReach > 0)) return null;
-      // MIRROR semantics: `side` is the duelist's arm, and the caller is
-      // expected to have crossed it already -- the player's right hand drives
-      // this body's LEFT one, the way a reflection does. Given that, u past the
-      // middle moves the hand toward the duelist's own left, which is local +X,
-      // so the across term ADDS.
+      // `u` is RAW camera x, not the mirrored x tracker.js publishes: 0 is the
+      // left of the lens's own picture, which -- since the player is facing it
+      // -- is the player's RIGHT. So u below the middle belongs on the body's
+      // right, local -X, and the across term ADDS.
       //
-      // Driving the same-side arm instead needs a reflection rather than a
-      // rotation, and a bone cannot hold one: the palm comes out inside out.
+      // Sending the mirrored x here instead is a reflection, not a rotation,
+      // and a bone cannot hold one: the arm crosses and the palm comes out
+      // inside out. js/mirror.js un-flips at its door; see unflip() there.
       out.set(
         shoulder.x + (u - 0.5) * 2 * REACH_BOX.across * armReach,
         shoulder.y + (0.5 - v) * 2 * REACH_BOX.rise * armReach,
