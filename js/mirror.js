@@ -173,7 +173,16 @@ function updateCamera() {
   const fov = firstPerson ? FIRST_PERSON_FOV : ORBIT_FOV;
   if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
 
+  // In first person the lens is the eye, so it turns with the head. `looking`
+  // is the EASED angle the body actually settled on, not the raw target -- read
+  // the target and the view would arrive somewhere the head has not got to yet.
+  // Drag still works, and adds on top: the head aims, the mouse re-centres.
   if (firstPerson && modelReady) {
+    _forward.set(
+      Math.sin(orbitYaw + avatar.looking) * Math.cos(orbitPitch),
+      Math.sin(orbitPitch),
+      Math.cos(orbitYaw + avatar.looking) * Math.cos(orbitPitch),
+    ).normalize();
     avatar.eyeWorld(_eye);
     camera.position.copy(_eye).addScaledVector(_forward, EYE_AHEAD);
     _look.copy(camera.position).addScaledVector(_forward, 6);
@@ -384,6 +393,11 @@ function driveBody(frame) {
     frame.pose?.left ? elbowTarget('left', frame.pose.left) : null,
   );
 
+  // The head turns with you. Null hands it back and it eases home, which is
+  // what should happen when the face leaves shot rather than the head staying
+  // craned wherever the last readable frame left it.
+  avatar.look(frame.tracked ? frame.head : null);
+
   for (const side of ['left', 'right']) {
     // The same two the arms were driven from, not a second lookup with its own
     // copy of the rules: fingers on one hand and the arm on the other is a bug
@@ -497,7 +511,11 @@ function drawReadout(frame) {
   } else {
     ctx.fillText('R · record 8s of landmarks to a file', 260, 124);
   }
-  ctx.fillText('no idle clip — only what is tracked moves', 24, 142);
+  ctx.fillText(
+    frame.head === null
+      ? 'head — no face in shot'
+      : `head — ${(frame.head * 180 / Math.PI).toFixed(0)}° (+ is your own left)`,
+    24, 142);
   if (placement) {
     ctx.fillStyle = /waiting|guessing/.test(placement) ? RED : DIM;
     ctx.fillText(placement, 24, 178);

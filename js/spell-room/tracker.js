@@ -17,7 +17,7 @@
 //      than a room with no webcam.
 
 import { LM, dist } from "./vec.js";
-import { readPose, sideOfWrist, createSideLatch, createLatch, handsCrossed } from "./pose.js";
+import { readPose, readHead, sideOfWrist, createSideLatch, createLatch, handsCrossed } from "./pose.js";
 import { makeOneEuro, makeSteady } from "./one-euro.js";
 
 export { LM, dist };
@@ -163,6 +163,11 @@ const anchorFilters = {
 const POSE_FILTER = { minCutoff: 1.0, beta: 3.0, dCutoff: 1.0, deadband: 0.008 };
 const poseFilters = new Map();
 
+// A head turn is in radians, not frame widths, so it gets its own band: about
+// two degrees, which is under what anyone can hold still to anyway.
+const HEAD_FILTER = { minCutoff: 1.0, beta: 2.0, dCutoff: 1.0, deadband: 0.035 };
+const headFilter = makeSteady(HEAD_FILTER);
+
 function steady(key, point, now) {
   if (!point) return null;
   let filter = poseFilters.get(key);
@@ -182,6 +187,7 @@ function steady(key, point, now) {
  *  the last one stood. */
 function forgetPose() {
   for (const filter of poseFilters.values()) { filter.x.reset(); filter.y.reset(); }
+  headFilter.reset();
 }
 
 /** Attach a smoothed `anchor` to each hand, and forget the sides that left. */
@@ -257,6 +263,11 @@ const frame = {
   // guess; see pose.js.
   pose: null,
   poseAt: 0,
+
+  // Which way the head is turned, in radians, positive toward the player's own
+  // left. Null when there is no face to read -- which includes every frame
+  // before the body model lands, so consumers must handle it.
+  head: null,
 
   // What the tracker still costs THIS thread, per frame, in milliseconds.
   // Everything else was moved to a worker; this is the decode that feeds it,
@@ -531,6 +542,7 @@ function applyResult(result) {
       // The body is only read while an arm is up, so let it go with the hand.
       // Holding it would leave the elbow bent the way it was when the hand left.
       frame.pose = null;
+      frame.head = null;
       forgetPose();
       tipX.reset();
       tipY.reset();
@@ -563,12 +575,16 @@ function applyResult(result) {
 function applyPose(body) {
   if (!body) {
     frame.pose = null;
+    frame.head = null;
     forgetPose();
     return;
   }
-  frame.pose = readPose(body.map((p) => ({
+  const flipped = body.map((p) => ({
     x: 1 - p.x, y: p.y, z: p.z, visibility: p.visibility,
-  })));
+  }));
+  frame.pose = readPose(flipped);
+  const yaw = readHead(flipped);
+  frame.head = yaw === null ? null : headFilter.filter(yaw, performance.now());
   if (!frame.pose) {
     forgetPose();
     return;

@@ -357,6 +357,40 @@ function collectFingerChains(model) {
  * between the bone and that frame at rest is constant, so it can be measured
  * once and used to turn a wanted palm direction back into a bone rotation.
  */
+// How the turn is split between the two bones. A neck carries most of a head
+// turn and the skull finishes it; putting all of it on Head alone is the same
+// mistake the wrist made before the forearm started sharing -- one joint doing
+// a whole limb's work, and the mesh creasing where it lands.
+const NECK_SHARE = 0.55;
+const HEAD_TRACK = 9;
+
+/**
+ * The two bones a head turn is spread over, with the local axis that means
+ * "up" for each of them.
+ *
+ * The axis is captured at bind rather than assumed to be Y: a bone's local axes
+ * are whatever the rig was exported with, and this one is named `neck` in
+ * lowercase while its child is `Head`, which is a fair warning not to assume
+ * anything else about it either.
+ */
+function collectHeadRig(model) {
+  model.updateMatrixWorld(true);
+  const up = new THREE.Vector3(0, 1, 0);
+  const bones = [];
+  for (const [name, share] of [['neck', NECK_SHARE], ['Head', 1 - NECK_SHARE]]) {
+    const bone = model.getObjectByName(name);
+    if (!bone) continue;
+    const inverse = bone.getWorldQuaternion(new THREE.Quaternion()).invert();
+    bones.push({
+      bone,
+      share,
+      rest: bone.quaternion.clone(),
+      axis: up.clone().applyQuaternion(inverse).normalize(),
+    });
+  }
+  return bones.length ? bones : null;
+}
+
 function collectPalmRig(model) {
   const rig = {};
   const along = new THREE.Vector3();
@@ -578,6 +612,9 @@ export function createDuelist(scene, {
   let armReach = 0;          // arm length, measured from the rig
   let shoulderLocal = null;  // right shoulder position in root space
   let leftShoulderLocal = null;
+  let headRig = null;
+  let headTarget = null;   // radians, positive toward this body's own left
+  let headLive = 0;
   // The draw, or null when the bow is down. Held as a whole pose rather than a
   // number so the side can change: archery.js picks the string hand from which
   // hand the player actually closed, and the body should copy that rather than
@@ -664,6 +701,21 @@ export function createDuelist(scene, {
      * would arrive backwards. Directions survive the trip; a cross product does
      * not. Pass null to hand the wrist back to the animation.
      */
+    /**
+     * Turn the head, in radians, positive toward this body's OWN left. Null
+     * hands it back to whatever else is posing it.
+     *
+     * Spread over the neck and the skull rather than written to one bone, and
+     * eased, because a head turn read off a `lite` pose model at a third of the
+     * hands' rate is the noisiest signal in the room and a head is the thing a
+     * viewer looks at hardest.
+     */
+    look(yaw) {
+      headTarget = Number.isFinite(yaw) ? clamp(yaw, -1.2, 1.2) : null;
+    },
+    /** Where the head is actually pointed, after easing -- for a camera that
+     *  has to look where it looks. */
+    get looking() { return headLive; },
     palm(side, along, across) {
       palmTarget[side === 'left' ? 'left' : 'right'] =
         along && across ? { along, across } : null;
@@ -978,6 +1030,7 @@ export function createDuelist(scene, {
       imported.name = `${name} Meshy model`;
       fingerChains = collectFingerChains(imported);
       palmRig = collectPalmRig(imported);
+      headRig = collectHeadRig(imported);
       imported.traverse(object => {
         if (!object.isMesh) return;
         object.castShadow = castShadow;
@@ -1298,6 +1351,18 @@ export function createDuelist(scene, {
             hint = _leftPole;
           }
           leftIK.solve(lastLeftReach, leftReachWeight, hint);
+        }
+      }
+
+      if (headRig) {
+        // Ease toward the target, and back to zero when it is dropped, so a
+        // head that loses tracking returns rather than staying wherever the
+        // last believable frame left it.
+        const wanted = headTarget ?? 0;
+        headLive += (wanted - headLive) * Math.min(1, dt * HEAD_TRACK);
+        for (const part of headRig) {
+          part.bone.quaternion.copy(part.rest);
+          part.bone.rotateOnAxis(part.axis, headLive * part.share);
         }
       }
 

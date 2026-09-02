@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { POSE, readPose, elbowHint, sideOfWrist, createSideLatch, createLatch, handsCrossed } from '../js/spell-room/pose.js';
+import { POSE, readPose, elbowHint, sideOfWrist, createSideLatch, createLatch, handsCrossed,
+  readHead, HEAD_LIMIT } from '../js/spell-room/pose.js';
 
 /**
  * A body standing square to the camera, already un-mirrored: the player's right
@@ -173,4 +174,78 @@ test('the generic latch holds anything that is not null', () => {
   assert.equal(latch.settle(null), false, 'and it survives the frames with none');
   latch.forget();
   assert.equal(latch.value, null);
+});
+
+// ── Which way the head is turned ──────────────────────────────────────────────
+
+/** A face, in the un-mirrored space readHead() is given. `turn` in -1..1 slides
+ *  the nose between the ears; the ears foreshorten as it does, exactly as a
+ *  real head's do, so the estimator is tested against the thing that breaks the
+ *  obvious one. */
+function face(turn = 0) {
+  const lm = new Array(33).fill(null).map(() => ({ x: 0.5, y: 0.5, z: 0, visibility: 0.9 }));
+  const half = 0.06 * Math.cos(turn * Math.PI / 3);      // ears close up as it turns
+  lm[POSE.NOSE] = { x: 0.5 - turn * 0.055, y: 0.42, z: 0, visibility: 0.9 };
+  lm[POSE.EARS[0]] = { x: 0.5 - half, y: 0.40, z: 0, visibility: 0.9 };
+  lm[POSE.EARS[1]] = { x: 0.5 + half, y: 0.40, z: 0, visibility: 0.9 };
+  return lm;
+}
+
+test('a head facing the lens is not turned', () => {
+  assert.ok(Math.abs(readHead(face(0))) < 1e-9);
+});
+
+test('turning to your own left reads positive, and right negative', () => {
+  // After the un-mirroring the player's left is the smaller x, so the nose
+  // moving that way is a turn to their own left.
+  assert.ok(readHead(face(0.6)) > 0.2, 'left should be positive');
+  assert.ok(readHead(face(-0.6)) < -0.2, 'right should be negative');
+});
+
+test('the reading grows with the turn instead of running away', () => {
+  // The failure of the obvious estimator: divide by the ear span and the answer
+  // explodes just as the head gets interesting, because the span is shrinking.
+  const steps = [0.2, 0.4, 0.6, 0.8].map(t => readHead(face(t)));
+  for (let i = 1; i < steps.length; i++) {
+    assert.ok(steps[i] > steps[i - 1], `not monotonic at step ${i}`);
+  }
+  assert.ok(steps.at(-1) <= HEAD_LIMIT + 1e-9, 'and it stays inside the neck');
+});
+
+test('turning further never turns the head back', () => {
+  // Measured: past the point where the nose projects outside the ear pair, the
+  // raw ratio comes back DOWN -- 0.96 at four fifths of a turn, 0.72 at a full
+  // one. Saturating is the difference between "as far as it goes" and "the head
+  // snaps the other way when you commit to the turn".
+  let worst = 0;
+  let previous = null;
+  for (let t = 0.05; t <= 2; t += 0.05) {
+    const reading = readHead(face(t));
+    // null is "cannot read this face", not "read a smaller number" -- past far
+    // enough the ears land on top of each other and there is nothing to say.
+    if (reading === null) { previous = null; continue; }
+    if (previous !== null) {
+      assert.ok(reading >= previous - 1e-9,
+        `turning to ${t.toFixed(2)} read ${reading.toFixed(4)}, below ${previous.toFixed(4)}`);
+    }
+    previous = reading;
+    worst = Math.max(worst, reading);
+  }
+  assert.ok(Math.abs(worst - HEAD_LIMIT) < 1e-9, 'and it ends pinned at the limit');
+});
+
+test('a turn and its mirror are the same size', () => {
+  assert.ok(Math.abs(readHead(face(0.5)) + readHead(face(-0.5))) < 1e-9);
+});
+
+test('no readable face is null, not zero', () => {
+  // Zero would mean "facing you", which is a claim. Null is the absence of one.
+  assert.equal(readHead(null), null);
+  assert.equal(readHead([]), null);
+  const noEars = face(0); noEars[POSE.EARS[0]] = { x: 0, y: 0, visibility: 0.1 };
+  assert.equal(readHead(noEars), null);
+  const sideOn = face(0);
+  sideOn[POSE.EARS[0]] = { x: 0.5, y: 0.4, visibility: 0.9 };
+  sideOn[POSE.EARS[1]] = { x: 0.505, y: 0.4, visibility: 0.9 };
+  assert.equal(readHead(sideOn), null, 'ears on top of each other says nothing');
 });

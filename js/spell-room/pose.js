@@ -29,7 +29,19 @@ export const POSE = {
   RIGHT_WRIST: 16,
   LEFT_HIP: 23,
   RIGHT_HIP: 24,
+  NOSE: 0,
+  // The model's own left/right again, and again not to be believed. Read as an
+  // unordered pair and sorted by x, the same way the arms are.
+  EARS: [7, 8],
 };
+
+// Ratio to radians. A ratio of 0.5 is a head turned about halfway, and 1.55
+// puts that near 45 degrees, which is where it feels right to a person.
+export const HEAD_GAIN = 1.55;
+// A neck stops. Past this the estimator is saturating anyway -- both ears stop
+// being visible and the ratio stops meaning much -- so clamping here is honest
+// rather than merely safe.
+export const HEAD_LIMIT = 1.05;   // 60 degrees
 
 // MediaPipe reports how sure it is that a joint is actually in shot. An elbow
 // behind the torso still gets coordinates, and they are a guess; feeding that
@@ -214,4 +226,62 @@ export function shoulderSpan(pose) {
   // Too small to divide by: the player is far away, side on, or the model has
   // put both shoulders in the same place. Callers fall back to the box.
   return span > 0.04 ? span : 0;
+}
+
+/**
+ * Which way the head is turned, in radians, positive toward the player's OWN
+ * left. Null when there is no readable face.
+ *
+ * Yaw only. Pitch is available from the same three points and is not returned,
+ * because it cannot be had honestly without calibration: a nose sits below the
+ * ear line at rest by an amount that differs per face, so "looking level" is a
+ * per-person constant and any fixed one is somebody else's face. Yaw has no
+ * such offset -- a head facing the lens is symmetric, whoever it belongs to.
+ *
+ * ── Why a ratio of distances, not the nose's offset ──
+ *
+ * The obvious estimator divides the nose's offset by the ear span. It fails
+ * exactly where it matters: as the head turns, the ears foreshorten, so the
+ * thing being divided by shrinks at the same time as the numerator grows, and
+ * the estimate runs away right when the turn gets interesting.
+ *
+ * The ratio of the two nose-to-ear distances has the scale cancel out of it
+ * instead. It is bounded in -1..1 by construction, it saturates gracefully
+ * rather than exploding, and it needs no idea of how far away anyone is.
+ */
+export function readHead(landmarks) {
+  if (!Array.isArray(landmarks) || landmarks.length <= Math.max(...POSE.EARS)) return null;
+  const nose = point(landmarks[POSE.NOSE]);
+  const ears = POSE.EARS.map(i => point(landmarks[i])).filter(Boolean);
+  if (!nose || ears.length !== 2) return null;
+
+  // Sides by x, never by the model's label: after the flip the smaller x is the
+  // player's own left. Same rule as the arms, for the same reason.
+  const [leftEar, rightEar] = ears[0].x <= ears[1].x ? ears : [ears[1], ears[0]];
+  const span = Math.hypot(rightEar.x - leftEar.x, rightEar.y - leftEar.y);
+  if (!(span > 0.02)) return null;      // side on, or too far away to read
+
+  // ── Saturate before the ratio folds back on itself ──
+  //
+  // The ratio only rises while the nose is BETWEEN the ears. Past a far enough
+  // turn the nose projects outside that pair, both distances start growing
+  // together, and the reading comes back DOWN -- so turning your head further
+  // would turn the character's head back. In practice the far ear also stops
+  // being visible around there and this returns null anyway, but a fold-back
+  // that is only prevented by luck is not prevented.
+  const axisX = rightEar.x - leftEar.x;
+  const axisY = rightEar.y - leftEar.y;
+  const along =
+    ((nose.x - leftEar.x) * axisX + (nose.y - leftEar.y) * axisY) / (span * span);
+  if (along <= 0) return HEAD_LIMIT;    // nose past the left ear: fully turned left
+  if (along >= 1) return -HEAD_LIMIT;
+
+  const toLeft = Math.hypot(nose.x - leftEar.x, nose.y - leftEar.y);
+  const toRight = Math.hypot(nose.x - rightEar.x, nose.y - rightEar.y);
+  const total = toLeft + toRight;
+  if (!(total > 1e-4)) return null;
+
+  // Nose nearer the left ear means the head has turned to the player's left.
+  const turn = (toRight - toLeft) / total;
+  return Math.max(-HEAD_LIMIT, Math.min(HEAD_LIMIT, turn * HEAD_GAIN));
 }
