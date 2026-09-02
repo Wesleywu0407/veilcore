@@ -188,6 +188,12 @@ let status = 'idle';
 const curls = { left: {}, right: {} };
 const readout = { left: null, right: null };
 
+// How the sides were decided this frame, in words. Every round of this bug --
+// the arm on the wrong side, the elbow that never arrived, the body model that
+// never loaded -- cost a screenshot and a guess, because the panel showed WHAT
+// the tracking did and never WHY. This is the why.
+let placement = null;
+
 const _handTarget = new THREE.Vector3();
 const _camRight = new THREE.Vector3();
 const _camUp = new THREE.Vector3();
@@ -284,11 +290,16 @@ function driveBody(frame) {
     // it to rest for the ~150ms the body model takes to answer and then hauling
     // it back up. Returning leaves every target exactly where it was, which is
     // what "not yet" ought to look like.
+    placement = 'one hand — waiting for the body to place it';
     return;
   }
   const lone = unplaced ? hands[0] : null;
   const right = hands.find(h => h.side === 'right') ?? lone;
   const left = hands.find(h => h.side === 'left') ?? null;
+  placement = hands.length === 0 ? null
+    : hands.length === 2 ? 'both hands — sides by x'
+    : unplaced ? 'one hand — guessing right, no body model'
+    : `one hand — body says ${hands[0].side}`;
 
   // Both arms, because a mirror with one live arm and one hanging is not a
   // mirror. The duel drives only the right; there the left is always holding
@@ -412,6 +423,11 @@ function drawReadout(frame) {
   ctx.fillText(`B · body model ${bodyTracking() ? 'ON' : 'off'}   T · tracking ${trackerOn ? 'ON' : 'off'}`, 24, 106);
   ctx.fillText(firstPerson ? 'V · FIRST PERSON' : 'V · ORBIT — drag to turn', 24, 124);
   ctx.fillText('no idle clip — only what is tracked moves', 24, 142);
+  if (placement) {
+    ctx.fillStyle = /waiting|guessing/.test(placement) ? RED : DIM;
+    ctx.fillText(placement, 24, 178);
+    ctx.fillStyle = DIM;
+  }
 
   // What is actually being drawn, so the frame rate has something to be read
   // against rather than being a bare number.
