@@ -267,6 +267,21 @@ function startBody(onStage) {
   };
 }
 
+/** Why the camera is unreachable here, and the shortest way out of it. */
+function cameraBlockedMessage() {
+  if (location.protocol === "file:") {
+    return "opened as a file — browsers refuse the webcam on file:// URLs. "
+      + "Serve the folder instead: npm run dev, then open http://localhost:5174/";
+  }
+  if (!isSecureContext) {
+    return `the webcam needs a secure page, and ${location.origin} is plain http. `
+      + "Browsers allow it only on https, localhost or 127.0.0.1. "
+      + "Whoever is hosting should run: npm run share — then both of you open the https link it prints.";
+  }
+  return "this browser exposes no camera API (navigator.mediaDevices is missing). "
+    + "Try Chrome, Edge or Safari, and check that no policy or extension is blocking media devices.";
+}
+
 /**
  * Ask for the camera and load the model. Must be called from a user gesture
  * (a click or keypress) — browsers refuse getUserMedia otherwise, and the
@@ -277,6 +292,20 @@ export async function initTracker(videoEl, onStage = () => {}) {
   video = videoEl;
   tipX.reset();
   tipY.reset();
+
+  // getUserMedia exists only in a secure context -- https, localhost, or
+  // 127.0.0.1 -- and where it does not, `navigator.mediaDevices` is not merely
+  // unavailable, it is undefined. Reaching through it throws "Cannot read
+  // properties of undefined (reading 'getUserMedia')", which names a property
+  // instead of the problem and is the last thing anyone needs when the camera
+  // IS the game.
+  //
+  // This is not a hypothetical path. It is the one a friend sent a LAN address
+  // walks straight into: the page loads, the arena renders, and the webcam
+  // never arrives. So check first and say the thing that actually fixes it.
+  if (!isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    throw new Error(cameraBlockedMessage());
+  }
 
   onStage("asking for the camera");
   const stream = await withTimeout(

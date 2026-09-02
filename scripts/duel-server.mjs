@@ -10,7 +10,7 @@ import { createRoomRegistry } from './duel-rooms.mjs';
 const ROOT = normalize(join(fileURLToPath(new URL('.', import.meta.url)), '..'));
 const useHttps = process.argv.includes('--https');
 const portArg = process.argv.findIndex(value => value === '--port');
-const port = Number(portArg >= 0 ? process.argv[portArg + 1] : process.env.VEILCORE_PORT ?? 5173);
+const port = Number(portArg >= 0 ? process.argv[portArg + 1] : process.env.VEILCORE_PORT ?? 5174);
 const host = process.env.VEILCORE_HOST ?? '0.0.0.0';
 const MIME = {
   '.html': 'text/html; charset=utf-8',

@@ -51,7 +51,7 @@ It was split out of `~/Desktop/2ndgames新版` on 2026-08-30. **That copy is a
 dead branch — never edit the arena files there.** This repo is the live one.
 
 ```bash
-npm run dev    # HTTP static + WebSocket room server on port 5173
+npm run dev    # HTTP static + WebSocket room server on port 5174
 npm run cert   # generate the ignored local CA and HTTPS certificate
 npm run dev:https
 npm run share  # start server + temporary trusted HTTPS tunnel for a friend

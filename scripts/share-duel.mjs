@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const port = Number(process.env.VEILCORE_PORT ?? 5173);
+const port = Number(process.env.VEILCORE_PORT ?? 5174);
 const healthUrl = `http://127.0.0.1:${port}/__veilcore/health`;
 const children = new Set();
 let stopping = false;

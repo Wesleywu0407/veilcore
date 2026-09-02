@@ -16,8 +16,8 @@ test('room codes are short, uppercase and avoid punctuation', () => {
 test('room sockets follow the page security', () => {
   assert.equal(roomSocketUrl({ protocol: 'https:', host: 'duel.test' }, { mode: 'join', room: 'abcd' }),
     'wss://duel.test/ws?mode=join&room=ABCD');
-  assert.equal(roomSocketUrl({ protocol: 'http:', host: '127.0.0.1:5173' }, { mode: 'create' }),
-    'ws://127.0.0.1:5173/ws?mode=create');
+  assert.equal(roomSocketUrl({ protocol: 'http:', host: '127.0.0.1:5174' }, { mode: 'create' }),
+    'ws://127.0.0.1:5174/ws?mode=create');
 });
 
 test('the room health check verifies the Veilcore server rather than any static server', async () => {

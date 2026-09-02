@@ -41,6 +41,17 @@ const joinForm = document.querySelector('[data-arena-join]');
 const joinButton = joinForm?.querySelector('button');
 const roomCodeInput = document.querySelector('[data-arena-room-code]');
 const roomStatusLine = document.querySelector('[data-arena-room-status]');
+const roomPanel = document.querySelector('[data-arena-room-panel]');
+const roomPanelCode = document.querySelector('[data-arena-room-panel-code]');
+const roomPanelMessage = document.querySelector('[data-arena-room-panel-message]');
+const roomPanelClose = document.querySelector('[data-arena-room-panel-close]');
+const roomCancelButton = document.querySelector('[data-arena-room-cancel]');
+const pausePanel = document.querySelector('[data-arena-pause]');
+const pauseTitle = document.querySelector('[data-arena-pause-title]');
+const pauseNote = document.querySelector('[data-arena-pause-note]');
+const resumeButton = document.querySelector('[data-arena-resume]');
+const quitButton = document.querySelector('[data-arena-quit]');
+const pauseCloseButton = document.querySelector('[data-arena-pause-close]');
 const errorLine = document.querySelector('[data-arena-error]');
 const statusLine = document.querySelector('[data-arena-status]');
 const ctx = overlayCanvas.getContext('2d');
@@ -252,6 +263,13 @@ const roomClient = createRoomClient({
       if (!running) void beginDuel();
     } else if (running && onlineDuel) {
       setStatus('friend disconnected · duel paused');
+    } else if (roomPanelOpen) {
+      // Waiting, and the socket went away. Leave the box up rather than
+      // vanishing it: the player is looking at this screen, and it is the only
+      // place that can tell them the room is gone.
+      if (roomPanelMessage) {
+        roomPanelMessage.textContent = 'The duel server dropped the room. Close this and create another.';
+      }
     }
   },
   onState: applyRemoteState,
@@ -728,6 +746,14 @@ const _cameraPosition = new THREE.Vector3();
 const _opponentFacing = new THREE.Vector3();
 
 addEventListener('keydown', event => {
+  if (event.code === 'Escape') {
+    // Reaches here only when no pointer lock is held; with one, the browser
+    // eats this keydown and pointerlockchange opens the menu instead.
+    if (roomPanelOpen) closeTheRoom();
+    else if (menuOpen) closeMenu();
+    else openMenu();
+    return;
+  }
   keys.add(event.code);
   if (event.repeat) return;
   if (event.code === 'KeyH') void toggleTracking();
@@ -768,7 +794,132 @@ addEventListener('keydown', event => {
 });
 addEventListener('keyup', event => keys.delete(event.code));
 
-glCanvas.addEventListener('click', () => glCanvas.requestPointerLock());
+// ─── The waiting room ────────────────────────────────────────────────────────
+//
+// A four-character code you have to read off the screen and type into a chat
+// window is a terrible thing to render as one more clause in a status line, so
+// it gets the whole box. It closes itself the moment the duel starts, because
+// beginDuel() is what a friend arriving triggers.
+//
+// Dismissing this ABANDONS the room and invalidates the code you may have just
+// sent, so unlike the pause screen it does not close on a backdrop click. It
+// takes the X, the button, or Escape.
+let roomPanelOpen = false;
+
+function showRoomPanel(code) {
+  roomPanelOpen = true;
+  if (roomPanelCode) roomPanelCode.textContent = code;
+  if (roomPanelMessage) roomPanelMessage.textContent = 'Waiting for your friend to join…';
+  if (roomPanel) roomPanel.hidden = false;
+  roomCancelButton?.focus();
+}
+
+function hideRoomPanel() {
+  if (!roomPanelOpen) return;
+  roomPanelOpen = false;
+  if (roomPanel) roomPanel.hidden = true;
+}
+
+function closeTheRoom() {
+  hideRoomPanel();
+  roomClient.close();
+  onlineDuel = false;
+  peerConnected = false;
+  roomRole = null;
+  void refreshRoomServerStatus();
+}
+
+roomCancelButton?.addEventListener('click', closeTheRoom);
+roomPanelClose?.addEventListener('click', closeTheRoom);
+
+// ─── The pause screen ────────────────────────────────────────────────────────
+//
+// Escape is not ours to bind outright. Clicking the canvas takes pointer lock
+// for mouse-look, and while that lock is held Escape is the browser's own
+// unlock gesture -- Chrome releases the lock and never delivers the keydown to
+// the page. So a keydown handler alone would do nothing for anyone who had
+// clicked to look around, which is everyone.
+//
+// Both doors are wired instead: the keydown, for when no lock is held, and the
+// pointerlockchange, for when one is. Losing the lock any other way -- tabbing
+// out, switching windows -- opens the menu too, which is the behaviour you want
+// anyway.
+//
+// Solo pauses. A room does not: your friend cannot be frozen by your keypress,
+// so stopping your own loop would only leave you a stationary target with your
+// state packets stopped, since sendNetworkState lives inside step().
+let menuOpen = false;
+
+const menuPauses = () => menuOpen && !onlineDuel;
+
+function openMenu() {
+  if (!running || menuOpen) return;
+  menuOpen = true;
+  // Set before releasing the lock: exitPointerLock fires pointerlockchange,
+  // which would otherwise come straight back round and re-enter here.
+  if (document.pointerLockElement === glCanvas) document.exitPointerLock();
+  // A key held down when the menu opened would still be held when it closed,
+  // and the duelist would walk off on its own.
+  keys.clear();
+  if (pauseTitle) pauseTitle.textContent = onlineDuel ? 'MENU' : 'PAUSED';
+  if (pauseNote) {
+    pauseNote.textContent = onlineDuel
+      ? 'The duel is still running — your friend can still move and shoot.'
+      : 'Click outside this box, press Escape, or Resume to carry on.';
+  }
+  if (pausePanel) pausePanel.hidden = false;
+  resumeButton?.focus();
+}
+
+function closeMenu() {
+  if (!menuOpen) return;
+  menuOpen = false;
+  if (pausePanel) pausePanel.hidden = true;
+  // Without this the first frame back carries the whole time the menu was open.
+  // step() clamps dt anyway, so this is belt and braces rather than the only
+  // thing standing between you and a teleport.
+  last = performance.now();
+  // Pointer lock is deliberately NOT re-taken. Re-requesting it right after an
+  // Escape unlock is refused by Chrome for about a second, and a lens that
+  // grabs the mouse back on its own is startling. Click the arena to look
+  // around again, the same way you did the first time.
+}
+
+function quitToMenu() {
+  closeMenu();
+  running = false;
+  keys.clear();
+  roomClient.close();
+  onlineDuel = false;
+  peerConnected = false;
+  roomRole = null;
+  resetRound({ broadcast: false });
+  if (errorLine) errorLine.hidden = true;
+  if (startPanel) startPanel.hidden = false;
+  coverVideo?.play().catch(() => {});
+  setStatus('back at the gate');
+  void refreshRoomServerStatus();
+}
+
+resumeButton?.addEventListener('click', closeMenu);
+quitButton?.addEventListener('click', quitToMenu);
+pauseCloseButton?.addEventListener('click', closeMenu);
+// Only the backdrop itself, never a click that started inside the box.
+pausePanel?.addEventListener('click', event => {
+  if (event.target === pausePanel) closeMenu();
+});
+
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement === glCanvas) return;
+  openMenu();
+});
+
+glCanvas.addEventListener('click', () => {
+  // Clicking through to grab the lens while the menu is up would be a click the
+  // player aimed at a button.
+  if (menuOpen) return;
+  glCanvas.requestPointerLock();
+});
 addEventListener('mousemove', event => {
   if (document.pointerLockElement !== glCanvas) return;
   orbitYaw -= event.movementX * 0.0024;
@@ -1128,6 +1279,7 @@ async function toggleTracking() {
 async function beginDuel() {
   if (running) return;
   coverVideo?.pause();
+  hideRoomPanel();
   startPanel.hidden = true;
   running = true;
   last = performance.now();
@@ -1136,6 +1288,16 @@ async function beginDuel() {
   if (NO_CAMERA) {
     setSelfieVisible(false);
     setStatus('keyboard casting ready · webcam skipped for QA');
+    return;
+  }
+  // Quitting to the menu leaves the camera running on purpose: the tracker
+  // takes seconds to wake and the model has to load, and paying that again to
+  // start a second duel is worse than a webcam light staying on at the gate.
+  // But it does mean this can be re-entered with a live stream already
+  // attached, and initialising over the top of one strands the old tracks.
+  if (tracking) {
+    setSelfieVisible(true);
+    setStatus('hand casting ready');
     return;
   }
   try {
@@ -1166,6 +1328,7 @@ hostButton?.addEventListener('click', async () => {
     onlineDuel = true;
     const joined = await roomClient.connect({ mode: 'create' });
     setRoomStatus(`ROOM ${joined.room} · SHARE THIS CODE · WAITING FOR FRIEND`);
+    showRoomPanel(joined.room);
   } catch (error) {
     onlineDuel = false;
     setRoomStatus(roomConnectionMessage(error.message));
@@ -1436,6 +1599,14 @@ function loop(now) {
 }
 
 function step(now) {
+  if (menuPauses()) {
+    // Keep the chain alive and the last frame on the glass; simulate nothing.
+    // The 2D overlay is only ever cleared at the top of a real step, so the HUD
+    // stays put underneath as well.
+    last = now;
+    renderer.render(scene, camera);
+    return;
+  }
   const dt = Math.min((now - last) / 1000, 0.08);
   last = now;
   worldTime += dt;
