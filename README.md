@@ -80,6 +80,38 @@ Both devices must install and trust `.cert/veilcore-ca.crt`, then open the HTTPS
 LAN address printed by the server. Trust is necessary: a plain `http://192.168…`
 page can load the game, but browsers will refuse its webcam.
 
+### Permanent Vercel rooms
+
+The repository can also run the public site and the room server in one Vercel
+project. The browser still uses `/ws` and `/__veilcore/health`; `vercel.json`
+routes those paths to the Node functions in `api/`. Local `npm run dev` is
+unchanged and does not use Redis.
+
+Vercel may place the two players on different Function instances, so production
+rooms require a Redis integration. The deployment deliberately reports the room
+server as unavailable when `REDIS_URL` is missing instead of sometimes matching
+players by accident in one warm instance.
+
+```bash
+npm install
+npm install --global vercel@latest
+vercel link
+vercel integration add upstash
+vercel env pull .env.local
+npm run dev:vercel
+vercel --prod
+```
+
+Choose an Upstash Redis database when the integration command asks. It injects
+`REDIS_URL` into the Vercel project. WebSockets also require Fluid Compute; it is
+enabled by default on new Vercel projects, but an older project should confirm
+it under **Project Settings → Functions** before deploying.
+
+After deployment, open the production URL on two devices. One player presses
+**CREATE ROOM**, shares the four-character code, and the other presses **JOIN
+ROOM**. If a Vercel Function reaches its duration limit during a duel, the room
+client reconnects to the same room and role automatically.
+
 ### If the camera never starts
 
 The bottom-right corner tells you which step it is on. `OPEN + CLOSE TO

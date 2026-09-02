@@ -4,10 +4,11 @@ export function normaliseRoomCode(value) {
   return String(value ?? '').toUpperCase().replace(/[^A-Z2-9]/g, '').slice(0, 4);
 }
 
-export function roomSocketUrl(locationLike, { mode, room = '' }) {
+export function roomSocketUrl(locationLike, { mode, room = '', clientId = '' }) {
   const protocol = locationLike.protocol === 'https:' ? 'wss:' : 'ws:';
   const query = new URLSearchParams({ mode });
   if (room) query.set('room', normaliseRoomCode(room));
+  if (clientId) query.set('clientId', clientId);
   return `${protocol}//${locationLike.host}/ws?${query}`;
 }
 
@@ -50,11 +51,19 @@ export function createRoomClient({
   onEvent = () => {},
   onReset = () => {},
   connectionTimeoutMs = 8000,
+  reconnectBaseMs = 1000,
+  reconnectMaxMs = 30_000,
 } = {}) {
   let socket = null;
   let room = null;
   let role = null;
   let peerPresent = false;
+  let desiredConnection = null;
+  let reconnectTimer = null;
+  let reconnectDelay = reconnectBaseMs;
+  let generation = 0;
+  const clientId = globalThis.crypto?.randomUUID?.()
+    ?? `p_${Math.random().toString(36).slice(2, 12)}`;
 
   function send(message) {
     if (!socket || socket.readyState !== WebSocketImpl.OPEN) return false;
@@ -62,7 +71,29 @@ export function createRoomClient({
     return true;
   }
 
-  function connect({ mode, room: requestedRoom = '' }) {
+  function clearReconnect() {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  function scheduleReconnect() {
+    if (!desiredConnection || reconnectTimer) return;
+    const delay = reconnectDelay;
+    reconnectDelay = Math.min(reconnectDelay * 2, reconnectMaxMs);
+    onStatus('duel server reconnecting…');
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (!desiredConnection) return;
+      openSocket(desiredConnection, true).catch(error => {
+        if (!desiredConnection) return;
+        onStatus(error.message || 'duel server unavailable');
+        scheduleReconnect();
+      });
+    }, delay);
+  }
+
+  function openSocket({ mode, room: requestedRoom = '' }, reconnecting = false) {
+    const attempt = ++generation;
     const previous = socket;
     socket = null;
     previous?.close();
@@ -74,10 +105,14 @@ export function createRoomClient({
     return new Promise((resolve, reject) => {
       let welcomed = false;
       let settled = false;
-      const candidate = new WebSocketImpl(roomSocketUrl(locationLike, { mode, room: roomCode }));
+      const candidate = new WebSocketImpl(roomSocketUrl(locationLike, {
+        mode,
+        room: roomCode,
+        clientId,
+      }));
       socket = candidate;
       const timer = setTimeout(() => {
-        if (settled || socket !== candidate) return;
+        if (settled || socket !== candidate || generation !== attempt) return;
         settled = true;
         candidate.close();
         reject(new Error('duel server connection timed out'));
@@ -107,6 +142,9 @@ export function createRoomClient({
           room = message.room;
           role = message.role;
           peerPresent = Boolean(message.peerPresent);
+          desiredConnection = { mode: 'resume', room };
+          reconnectDelay = reconnectBaseMs;
+          clearReconnect();
           onPeer(peerPresent, { room, role });
           succeed({ room, role, peerPresent });
         } else if (message.type === 'peer') {
@@ -121,21 +159,31 @@ export function createRoomClient({
         } else if (message.type === 'error') {
           const error = new Error(message.message || 'room connection failed');
           onStatus(error.message);
+          if (reconnecting && /not found|full/i.test(error.message)) desiredConnection = null;
           if (!welcomed) fail(error);
         }
       });
       candidate.addEventListener('close', () => {
-        if (socket !== candidate) return;
+        if (socket !== candidate || generation !== attempt) return;
+        socket = null;
         peerPresent = false;
         onPeer(false, { room, role });
         if (!welcomed) fail(new Error('duel server closed the connection'));
+        else scheduleReconnect();
       });
       candidate.addEventListener('error', () => {
-        if (socket !== candidate) return;
+        if (socket !== candidate || generation !== attempt) return;
         if (!welcomed) fail(new Error('duel server unavailable'));
         else onStatus('duel server unavailable');
       });
     });
+  }
+
+  function connect({ mode, room: requestedRoom = '' }) {
+    desiredConnection = null;
+    clearReconnect();
+    reconnectDelay = reconnectBaseMs;
+    return openSocket({ mode, room: requestedRoom });
   }
 
   return {
@@ -144,6 +192,9 @@ export function createRoomClient({
     sendEvent: event => peerPresent && send({ type: 'event', event }),
     sendReset: () => peerPresent && send({ type: 'reset' }),
     close() {
+      desiredConnection = null;
+      clearReconnect();
+      generation++;
       const current = socket;
       socket = null;
       peerPresent = false;

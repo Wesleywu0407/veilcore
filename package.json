@@ -6,11 +6,16 @@
   "description": "A five-minute duel you cast by drawing runes in the air.",
   "scripts": {
     "dev": "node scripts/duel-server.mjs",
+    "dev:vercel": "vercel dev",
     "cert": "sh scripts/create-local-cert.sh",
     "dev:https": "node scripts/duel-server.mjs --https",
     "share": "node scripts/share-duel.mjs",
     "test": "node --test tests/*.test.mjs",
     "runes": "node scripts/rune-distance.mjs",
     "assets": "node scripts/glb-info.mjs"
+  },
+  "dependencies": {
+    "ioredis": "^5.11.1",
+    "ws": "^8.21.0"
   }
 }
