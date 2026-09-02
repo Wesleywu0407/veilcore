@@ -1365,7 +1365,20 @@ export function createDuelist(scene, {
         }
       }
 
-      if (headRig) {
+      // ── Only touch the head while something is actually turning it ──
+      //
+      // These two bones are ANIMATED by the duel's clip. Writing bind pose over
+      // them every frame -- which is what running this block unconditionally
+      // does once headLive has eased to zero -- freezes the duelist's head and
+      // takes the idle's head motion with it. The mirror loads no clips, so it
+      // never showed; the duel would have.
+      //
+      // So the block hands the bones back the moment it has nothing to say,
+      // exactly the way the palm rig hands the wrist back. `look(null)` still
+      // eases home first, and only lets go once it has arrived.
+      const headActive = headTarget !== null
+        || Math.abs(headLive) > 1e-4 || Math.abs(headPitchLive) > 1e-4;
+      if (headRig && headActive) {
         // Ease toward the target, and back to zero when it is dropped, so a
         // head that loses tracking returns rather than staying wherever the
         // last believable frame left it.

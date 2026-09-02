@@ -370,6 +370,8 @@ function driveBody(frame) {
     // it back up. Returning leaves every target exactly where it was, which is
     // what "not yet" ought to look like.
     placement = 'one hand — waiting for the body to place it';
+    // The head is not waiting on anything: it reads the face, not the hands.
+    avatar.look(frame.tracked ? frame.head?.yaw : null, frame.head?.pitch ?? 0);
     return;
   }
   const lone = unplaced ? hands[0] : null;
@@ -668,6 +670,10 @@ function recordFrame(frame, now) {
       wrist: trim(h.wrist), anchor: trim(h.anchor), tip: trim(h.tip),
     })),
     pose: frame.pose ? { left: arm('left'), right: arm('right') } : null,
+    head: frame.head
+      ? { yaw: +frame.head.yaw.toFixed(4), pitch: +frame.head.pitch.toFixed(4),
+          lift: +frame.head.lift.toFixed(4), levelled: frame.head.levelled }
+      : null,
     placement,
   });
 }
@@ -699,7 +705,10 @@ const HAND_LINKS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10]
   [10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
 
 function drawScan(frame) {
-  video.hidden = scan.hidden = !showCamera;
+  // The video is TUCKED, never hidden: see the note on .is-tucked. The canvas
+  // over it has no such constraint and can go away properly.
+  video.classList.toggle('is-tucked', !showCamera);
+  scan.hidden = !showCamera;
   if (!showCamera || !video.videoWidth) return;
   const w = video.clientWidth || 260;
   const h = Math.round(w * video.videoHeight / video.videoWidth);

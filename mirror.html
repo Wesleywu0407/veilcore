@@ -28,7 +28,13 @@
       border: 1px solid #2a3350; pointer-events: none; z-index: 3;
       background: #05070d;
     }
-    .mirror-video[hidden] { display: none; }
+    /* Tucked away, NOT display:none. The tracker reads frames out of this
+       element, and a display:none video is allowed to stop producing them --
+       which is why it was a 1x1 transparent pixel before it was ever shown, and
+       why hiding it has to put it back to one rather than remove it. */
+    .mirror-video.is-tucked {
+      width: 1px; height: 1px; opacity: 0; border: 0; right: 0; bottom: 0;
+    }
     /* Landmarks are drawn on top of it, in its own coordinates. */
     .mirror-scan {
       position: fixed; right: 18px; bottom: 18px; width: 260px;
@@ -62,7 +68,7 @@
 <body>
   <canvas class="mirror-gl" data-mirror-gl></canvas>
   <canvas class="mirror-overlay" data-mirror-overlay></canvas>
-  <video class="mirror-video" data-mirror-video playsinline muted autoplay hidden></video>
+  <video class="mirror-video is-tucked" data-mirror-video playsinline muted autoplay></video>
   <canvas class="mirror-scan" data-mirror-scan hidden></canvas>
 
   <section class="mirror-start" data-mirror-start>
