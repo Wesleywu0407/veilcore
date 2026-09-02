@@ -148,7 +148,11 @@ let modelReady = false;
 
 // ─── Camera ───────────────────────────────────────────────────────────────────
 
-let firstPerson = false;
+// First person on the way in. The mirror's whole claim is that the body is
+// yours, and that reads at once from behind your own eyes and takes a moment to
+// read from across the room. V still swaps, and orbit is still where you go to
+// check what the tracking is actually doing to the rest of the body.
+let firstPerson = true;
 // Start BEHIND the character, over its shoulder, because that is the view the
 // tracking is true in: standing behind someone, their right hand is on your
 // right. Facing them it is on your left, and a body that copies you same-side
@@ -225,15 +229,34 @@ const ARM_IN_SPANS = 1.55;
  * Falls back to the box when there is no body: still absolute, still drifts,
  * but an arm that drifts beats an arm that does not move.
  */
+// ── The last shoulder each arm was measured against ──
+//
+// frame.pose goes null the instant the body model misses a sample -- the body
+// leaves shot, an arm crosses the torso, a shoulder drops under the visibility
+// floor -- and it is sampled at a third of the hands' rate to begin with.
+//
+// Falling back to reachBox() there is not a smaller version of the same answer,
+// it is a DIFFERENT MAPPING: one measures from your shoulder, the other from
+// the middle of the picture. Swapping between them mid-gesture moves the hand
+// by however far your shoulder happens to be from centre, in one frame. That is
+// the hand suddenly flying off -- not drift, a cut.
+//
+// A shoulder that is one sample old is a perfectly good shoulder. Hold it.
+const lastAnchor = { left: null, right: null };
+
 function handTarget(side, at, pose) {
   const shoulder = pose?.[side]?.shoulder;
   const scale = shoulderSpan(pose) * ARM_IN_SPANS;
-  if (!shoulder || !scale) return avatar.reachBox(side, 1 - at.x, at.y, _handTarget);
+  if (shoulder && scale) lastAnchor[side] = { x: shoulder.x, y: shoulder.y, scale };
+  const held = lastAnchor[side];
+  // Only the very first frames, before any body has ever been seen, take the
+  // box -- and from there it is one-way, so there is nothing to jump between.
+  if (!held) return avatar.reachBox(side, 1 - at.x, at.y, _handTarget);
 
   // Raw picture offset, shoulder to hand. Both x's un-flip, and the two `1 -`
   // cancel into the subtraction the other way round.
-  const dx = (shoulder.x - at.x) / scale;
-  const dy = -(at.y - shoulder.y) / scale;
+  const dx = (held.x - at.x) / held.scale;
+  const dy = -(at.y - held.y) / held.scale;
   const flat = Math.hypot(dx, dy);
   const dz = flat >= 1 ? 0 : Math.sqrt(1 - flat * flat) * REACH_DEPTH;
   return avatar.reachOffset(side, dx, dy, dz, _handTarget);
@@ -305,6 +328,10 @@ function trackedDirection(v, out) {
 
 function driveBody(frame) {
   const hands = frame.hands ?? [];
+  // A held shoulder is only good while it is still YOUR shoulder. Once the
+  // hands are gone the body may be somewhere else entirely by the time they
+  // come back, so the hold ends with them rather than outliving them.
+  if (!frame.tracked) { lastAnchor.left = lastAnchor.right = null; }
   // A lone hand arrives with its real side on it: the body model places it, and
   // a latch holds that answer between body samples. See sideOfWrist().
   //
@@ -462,6 +489,14 @@ function drawReadout(frame) {
   ctx.fillStyle = DIM;
   ctx.fillText(`B · body model ${bodyTracking() ? 'ON' : 'off'}   T · tracking ${trackerOn ? 'ON' : 'off'}`, 24, 106);
   ctx.fillText(firstPerson ? 'V · FIRST PERSON' : 'V · ORBIT — drag to turn', 24, 124);
+  if (recording) {
+    const left = RECORD_SECONDS - (performance.now() - recording.started) / 1000;
+    ctx.fillStyle = RED;
+    ctx.fillText(`R · RECORDING — ${Math.max(0, left).toFixed(1)}s, ${recording.frames.length} frames`, 260, 124);
+    ctx.fillStyle = DIM;
+  } else {
+    ctx.fillText('R · record 8s of landmarks to a file', 260, 124);
+  }
   ctx.fillText('no idle clip — only what is tracked moves', 24, 142);
   if (placement) {
     ctx.fillStyle = /waiting|guessing/.test(placement) ? RED : DIM;
@@ -555,12 +590,72 @@ function loop() {
   updateCamera();
 
   renderer.render(scene, camera);
+  recordFrame(frame, now);
   maybeDrawReadout(frame, now);
+}
+
+// ─── Recording what the tracker actually said ─────────────────────────────────
+//
+// Every round of this has been: a screenshot, a guess, a fix, another
+// screenshot. A screenshot shows the RESULT and never the numbers behind it,
+// and "the hand suddenly flew off" is a thing that happens in three frames --
+// which is exactly the window a screenshot cannot hold.
+//
+// A video of the player would not help either: the landmarks are what the maths
+// runs on, and getting from video back to landmarks means running MediaPipe
+// again somewhere it cannot run.
+//
+// So record the landmarks. R starts it, it stops on its own, and it saves a
+// file that can be replayed through the same arithmetic offline -- where a jump
+// is a number that changed by too much between two frames, and is findable in
+// seconds rather than in another round of screenshots.
+const RECORD_SECONDS = 8;
+let recording = null;
+
+function startRecording() {
+  recording = { started: performance.now(), frames: [] };
+}
+
+const trim = p => (p ? { x: +p.x.toFixed(5), y: +p.y.toFixed(5) } : null);
+
+function recordFrame(frame, now) {
+  if (!recording) return;
+  if (now - recording.started > RECORD_SECONDS * 1000) {
+    saveRecording();
+    return;
+  }
+  const arm = side => {
+    const a = frame.pose?.[side];
+    return a ? { shoulder: trim(a.shoulder), elbow: trim(a.elbow), wrist: trim(a.wrist) } : null;
+  };
+  recording.frames.push({
+    t: Math.round(now - recording.started),
+    tracked: frame.tracked,
+    stale: frame.stale,
+    hz: +rate.hz.toFixed(1),
+    hands: (frame.hands ?? []).map(h => ({
+      side: h.side, bodySide: h.bodySide ?? null,
+      wrist: trim(h.wrist), anchor: trim(h.anchor), tip: trim(h.tip),
+    })),
+    pose: frame.pose ? { left: arm('left'), right: arm('right') } : null,
+    placement,
+  });
+}
+
+function saveRecording() {
+  const blob = new Blob([JSON.stringify(recording, null, 1)], { type: 'application/json' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `veilcore-tracking-${Date.now()}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 4000);
+  recording = null;
 }
 
 addEventListener('keydown', event => {
   if (event.repeat) return;
   if (event.code === 'KeyV') firstPerson = !firstPerson;
+  if (event.code === 'KeyR' && !recording) startRecording();
   if (event.code === 'KeyB') setBodyTracking(!bodyTracking());
   // The comparison that was never actually made: what does this scene render at
   // with NO tracking at all? Everything so far has assumed the tracker was what
