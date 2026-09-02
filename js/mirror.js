@@ -255,6 +255,27 @@ function bar(x, y, width, value, colour) {
   ctx.fillRect(x, y, width * Math.max(0, Math.min(1, value)), 6);
 }
 
+// ── The readout is text, and text does not need sixty frames a second ──
+//
+// It was redrawn every frame: clearRect over the whole window, then fillText,
+// then the browser composites that full-window 2D canvas over the WebGL one.
+// That cost is fixed -- it does not fall when the WebGL pixel ratio drops, it
+// does not care whether the tracker is running, and it does not change when the
+// machine is plugged in. Which is exactly the shape of the frame rate that was
+// left over once all three of those were ruled out.
+//
+// Six times a second is faster than anyone reads a number.
+const READOUT_HZ = 6;
+let readoutAt = 0;
+let readoutOn = true;
+
+function maybeDrawReadout(frame, now) {
+  if (!readoutOn) return;
+  if (now - readoutAt < 1000 / READOUT_HZ) return;
+  readoutAt = now;
+  drawReadout(frame);
+}
+
 function drawReadout(frame) {
   const w = innerWidth;
   const h = innerHeight;
@@ -367,7 +388,7 @@ function loop() {
   updateCamera();
 
   renderer.render(scene, camera);
-  drawReadout(frame);
+  maybeDrawReadout(frame, now);
 }
 
 addEventListener('keydown', event => {
@@ -377,6 +398,12 @@ addEventListener('keydown', event => {
   // The comparison that was never actually made: what does this scene render at
   // with NO tracking at all? Everything so far has assumed the tracker was what
   // held it down, and that assumption has never been tested on its own.
+  // The A/B for the paragraph above: with the overlay gone entirely, does the
+  // frame rate move? If it does not, the compositing was never the cost either.
+  if (event.code === 'KeyO') {
+    readoutOn = !readoutOn;
+    if (!readoutOn) ctx.clearRect(0, 0, overlay.width, overlay.height);
+  }
   if (event.code === 'KeyP') {
     pixelStep = (pixelStep + 1) % PIXEL_STEPS.length;
     renderer.setPixelRatio(Math.min(devicePixelRatio, PIXEL_STEPS[pixelStep]));
