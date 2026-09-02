@@ -47,6 +47,16 @@ const POSE_MODEL_URL =
 let trackBody = true;
 const POSE_EVERY = 3;
 
+// ── The delegate, and why it is a knob ──
+//
+// Moving inference into a worker did not raise the frame rate. That is only
+// possible if the main THREAD was never the constraint -- and MediaPipe's GPU
+// delegate shares a GPU with the renderer, which no amount of threading
+// separates. Flip this to "CPU" and compare: if the frame rate goes UP while
+// inference itself gets slower, the two were fighting over the GPU and the
+// thread was never the problem.
+const HAND_DELEGATE = "GPU";
+
 let video = null;
 let handWorker = null;
 let bodyWorker = null;
@@ -137,6 +147,11 @@ const frame = {
   pose: null,
   poseAt: 0,
 
+  // What the tracker still costs THIS thread, per frame, in milliseconds.
+  // Everything else was moved to a worker; this is the decode that feeds it,
+  // and it was assumed to be free rather than measured.
+  decodeMs: 0,
+
   // How many detections have completed. The render loop runs far faster than
   // this, and it is THIS rate that decides whether a tracked arm looks smooth
   // or looks like it is stepping, so it is worth being able to read.
@@ -224,7 +239,7 @@ export async function initTracker(videoEl, onStage = () => {}) {
   // the short version is that inference and rendering were sharing one thread,
   // so a near-empty scene rendered at 39-55 fps and the tracker stalled to 0 Hz.
   onStage("starting the tracker");
-  handWorker = spawnWorker({ handModel: MODEL_URL });
+  handWorker = spawnWorker({ handModel: MODEL_URL, delegate: HAND_DELEGATE });
 
   const started = new Promise((resolve, reject) => {
     handWorker.onmessage = ({ data }) => {
@@ -280,7 +295,9 @@ function detectLoop() {
     // thread. It decodes rather than infers -- a fraction of a millisecond
     // against MediaPipe's fifteen -- and the handle transfers to the worker
     // with no copy.
+    const decodeStart = performance.now();
     createImageBitmap(video).then(bitmap => {
+      frame.decodeMs = frame.decodeMs * 0.8 + (performance.now() - decodeStart) * 0.2;
       if (!running) { bitmap.close(); return; }
       handWorker.postMessage({ type: "frame", bitmap, timestamp }, [bitmap]);
       // The body gets its own copy on its own cadence. A transferred bitmap

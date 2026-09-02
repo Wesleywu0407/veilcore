@@ -63,7 +63,7 @@ function stage(text) {
   self.postMessage({ type: "stage", stage: text });
 }
 
-async function init({ wasmRoot, handModel, poseModel }) {
+async function init({ wasmRoot, handModel, poseModel, delegate = "GPU" }) {
   const { FilesetResolver, HandLandmarker, PoseLandmarker } =
     await withTimeout(import(BUNDLE), 30000, "MediaPipe bundle");
   const vision = await withTimeout(
@@ -77,11 +77,11 @@ async function init({ wasmRoot, handModel, poseModel }) {
     try {
       hand = await withTimeout(
         HandLandmarker.createFromOptions(vision, {
-          baseOptions: { modelAssetPath: handModel, delegate: "GPU" },
+          baseOptions: { modelAssetPath: handModel, delegate },
           runningMode: "VIDEO",
           numHands: 2,
         }),
-        15000, "GPU model load",
+        15000, `${delegate} model load`,
       );
     } catch {
       stage("GPU refused — retrying on CPU");

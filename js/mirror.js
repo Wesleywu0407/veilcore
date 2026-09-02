@@ -24,6 +24,8 @@ import * as THREE from 'three';
 import { buildEnvironment } from './arena/scene.js';
 import { createDuelist } from './arena/duelist.js';
 import { initTracker, getFrame, disposeTracker, setBodyTracking, bodyTracking } from './spell-room/tracker.js';
+
+let trackerOn = true;
 import { fingerCurls, palmBasis, FINGERS } from './spell-room/fingers.js';
 import { loadGLB } from './arena/asset-library.js';
 
@@ -259,12 +261,17 @@ function drawReadout(frame) {
   ctx.fillText(`${Math.round(rate.fps)} fps drawn`, 24, 52);
   ctx.fillStyle = rate.hz >= 24 ? GOLD : rate.hz >= 14 ? BLUE : RED;
   ctx.fillText(`${rate.hz.toFixed(1)} Hz tracked  <- smoothness lives here`, 24, 70);
+  // What the tracker still costs this thread. Inference is in a worker now, so
+  // if this is small AND the frame rate is still low, the tracker is not what
+  // is holding it -- and the next suspect is the GPU the two of them share.
+  ctx.fillStyle = frame.decodeMs > 4 ? RED : DIM;
+  ctx.fillText(`${frame.decodeMs.toFixed(2)} ms decode on this thread`, 24, 88);
   ctx.fillStyle = DIM;
-  ctx.fillText(`B · body model ${bodyTracking() ? 'ON' : 'off'}`, 24, 88);
-  ctx.fillText(firstPerson ? 'V · FIRST PERSON' : 'V · ORBIT — drag to turn', 24, 106);
-  ctx.fillText('no idle clip — only what is tracked moves', 24, 124);
+  ctx.fillText(`B · body model ${bodyTracking() ? 'ON' : 'off'}   T · tracking ${trackerOn ? 'ON' : 'off'}`, 24, 106);
+  ctx.fillText(firstPerson ? 'V · FIRST PERSON' : 'V · ORBIT — drag to turn', 24, 124);
+  ctx.fillText('no idle clip — only what is tracked moves', 24, 142);
 
-  let y = 158;
+  let y = 176;
   for (const side of ['right', 'left']) {
     ctx.fillStyle = readout[side] ? BLUE : DIM;
     ctx.fillText(`${side.toUpperCase()} HAND${readout[side] ? '' : ' — not seen'}`, 24, y);
@@ -348,6 +355,13 @@ addEventListener('keydown', event => {
   if (event.repeat) return;
   if (event.code === 'KeyV') firstPerson = !firstPerson;
   if (event.code === 'KeyB') setBodyTracking(!bodyTracking());
+  // The comparison that was never actually made: what does this scene render at
+  // with NO tracking at all? Everything so far has assumed the tracker was what
+  // held it down, and that assumption has never been tested on its own.
+  if (event.code === 'KeyT') {
+    trackerOn = !trackerOn;
+    if (!trackerOn) disposeTracker();
+  }
 });
 glCanvas.addEventListener('click', () => glCanvas.requestPointerLock());
 addEventListener('mousemove', event => {
