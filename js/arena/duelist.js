@@ -686,11 +686,16 @@ export function createDuelist(scene, {
     reachBox(side, u, v, out) {
       const shoulder = side === 'left' ? leftShoulderLocal : shoulderLocal;
       if (!shoulder || !(armReach > 0)) return null;
-      // u past the middle is the player's right, and the duelist's own local +X
-      // is its LEFT, so the across term subtracts. The same expression serves
-      // both hands because each is measured from its own shoulder.
+      // MIRROR semantics: `side` is the duelist's arm, and the caller is
+      // expected to have crossed it already -- the player's right hand drives
+      // this body's LEFT one, the way a reflection does. Given that, u past the
+      // middle moves the hand toward the duelist's own left, which is local +X,
+      // so the across term ADDS.
+      //
+      // Driving the same-side arm instead needs a reflection rather than a
+      // rotation, and a bone cannot hold one: the palm comes out inside out.
       out.set(
-        shoulder.x - (u - 0.5) * 2 * REACH_BOX.across * armReach,
+        shoulder.x + (u - 0.5) * 2 * REACH_BOX.across * armReach,
         shoulder.y + (0.5 - v) * 2 * REACH_BOX.rise * armReach,
         shoulder.z + REACH_BOX.forward * armReach,
       );

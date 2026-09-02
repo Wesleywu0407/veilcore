@@ -178,18 +178,39 @@ function handTarget(side, tip) {
   return avatar.reachBox(side, tip.x, tip.y, _handTarget);
 }
 
-// Same mirror correction the duel makes, and for the same reason: tracker.js
-// un-mirrors x for position, which flips the chirality of the cloud, and a palm
-// frame is chirality-sensitive where a position is not.
-const PALM_HANDEDNESS = -1;
+// A scratch for turning a body-space direction into a world one.
+const _origin = new THREE.Vector3();
 
+// Which of the duelist's arms each of the player's hands drives.
+//
+// Crossed, because that is what a reflection is: raise your right hand at a
+// mirror and the reflection raises its left. Driving the same-side arm needs a
+// reflection to line up, and a bone rotation cannot express one -- that is the
+// whole reason the palm was arriving upside down and the hand going the wrong
+// way across the screen. One crossing fixes both.
+const MIRRORED = Object.freeze({ right: 'left', left: 'right' });
+
+/**
+ * A direction in the picture, pointed the same way in the BODY's space.
+ *
+ * It used to go through the viewing camera, which was left over from before the
+ * hand target moved into body space -- so the palm turned when you orbited and
+ * the hand did not. Two halves of one gesture in two different frames.
+ *
+ * The mapping, with the duelist facing the viewer and its arms crossed to the
+ * player's (see driveBody):
+ *
+ *   image +x  player's right   -> the duelist's left, which is local +X
+ *   image +y  down the picture -> down the body,       local -Y
+ *   image +z  away from lens   -> behind the duelist,  local -Z
+ *
+ * Note the determinant: (+1)(-1)(-1) = +1. It is a ROTATION. Driving the
+ * same-side arm instead would need (-1)(-1)(-1) = -1, a reflection, which is
+ * why the palm came out upside down before the arms were crossed.
+ */
 function trackedDirection(v, out) {
-  camera.matrixWorld.extractBasis(_camRight, _camUp, _camBack);
-  return out.set(0, 0, 0)
-    .addScaledVector(_camRight, v.x * PALM_HANDEDNESS)
-    .addScaledVector(_camUp, -v.y)
-    .addScaledVector(_camBack, -v.z)
-    .normalize();
+  out.set(v.x, -v.y, -v.z).normalize();
+  return avatar.root.localToWorld(out).sub(avatar.root.getWorldPosition(_origin));
 }
 
 function driveBody(frame) {
@@ -201,38 +222,39 @@ function driveBody(frame) {
   // Both arms, because a mirror with one live arm and one hanging is not a
   // mirror. The duel drives only the right; there the left is always holding
   // something.
+  // reach() drives the duelist's RIGHT arm, so the player's LEFT hand feeds it.
   avatar.reach(
-    frame.tracked && right ? handTarget('right', right.tip) : null,
+    frame.tracked && left ? handTarget('right', left.tip) : null,
     0,
     false,
-    frame.pose?.right ? elbowTarget('right', frame.pose.right) : null,
+    frame.pose?.left ? elbowTarget('right', frame.pose.left) : null,
   );
   avatar.reachLeft(
-    frame.tracked && left ? handTarget('left', left.tip) : null,
-    frame.pose?.left ? elbowTarget('left', frame.pose.left) : null,
+    frame.tracked && right ? handTarget('left', right.tip) : null,
+    frame.pose?.right ? elbowTarget('left', frame.pose.right) : null,
   );
 
   for (const side of ['left', 'right']) {
     const hand = hands.find(h => h.side === side)
       ?? (hands.length === 1 && hands[0].side === null && side === 'right' ? hands[0] : null);
     if (!hand) {
-      avatar.fingers(side, null);
-      avatar.palm(side, null, null);
+      avatar.fingers(MIRRORED[side], null);
+      avatar.palm(MIRRORED[side], null, null);
       readout[side] = null;
       continue;
     }
     const curl = fingerCurls(hand.landmarks, curls[side]);
-    avatar.fingers(side, curl);
+    avatar.fingers(MIRRORED[side], curl);
 
     const basis = palmBasis(hand.landmarks);
     if (basis) {
       avatar.palm(
-        side,
+        MIRRORED[side],
         trackedDirection(basis.along, _along[side]),
         trackedDirection(basis.across, _across[side]),
       );
     } else {
-      avatar.palm(side, null, null);
+      avatar.palm(MIRRORED[side], null, null);
     }
     readout[side] = { curl: { ...curl }, palm: Boolean(basis) };
   }
