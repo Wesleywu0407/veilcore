@@ -18,7 +18,7 @@
 
 import { LM, dist } from "./vec.js";
 import { readPose, sideOfWrist, createSideLatch, createLatch, handsCrossed } from "./pose.js";
-import { makeOneEuro } from "./one-euro.js";
+import { makeOneEuro, makeSteady } from "./one-euro.js";
 
 export { LM, dist };
 
@@ -119,10 +119,70 @@ const tipY = makeOneEuro(TIP_FILTER);
 // Smoothed, and per side, because `hands[].wrist` is raw. Only `frame.tip` was
 // ever filtered, so both arms in the mirror were being driven by landmarks
 // straight off the model, jitter and all, at 14-23Hz.
+//
+// And it gets its OWN constants, not the wand tip's. A rune cursor has to keep
+// up with a flick, so TIP_FILTER is tuned to let noise through rather than lag.
+// An arm is the opposite trade: a few milliseconds of lag on an arm reads as
+// weight, and a shiver reads as broken. Lower minCutoff for stillness, higher
+// beta so a real swing still arrives on time.
+// The deadband is what actually holds it still; the lowpass only has to take
+// the edge off, so its cutoff stays high enough not to lag a real swing.
+// 0.005 is half a percent of the frame -- under a centimetre at arm's length,
+// and comfortably beneath the wobble the hand model leaves on a still hand.
+//
+// beta is the adaptive half, and it was doing NOTHING at the 0.015 the tip
+// filter carries: the speed estimate here is around 1.2 frame-widths a second,
+// so 0.015 of it adds two hundredths of a hertz to the cutoff. Measured, the
+// lag on a real swing against beta, with the deadband holding stillness:
+//
+//   beta 0.02 -> 2.28 frames behind      beta 3 -> 0.46
+//   beta 0.5  -> 1.13                    beta 6 -> 0.30
+//
+// and the stillness did not change at any of them, because that is the
+// deadband's job, not this one's. So the lowpass is free to be fast.
+const ANCHOR_FILTER = { minCutoff: 1.5, beta: 6.0, dCutoff: 1.0, deadband: 0.005 };
+
 const anchorFilters = {
-  left: { x: makeOneEuro(TIP_FILTER), y: makeOneEuro(TIP_FILTER) },
-  right: { x: makeOneEuro(TIP_FILTER), y: makeOneEuro(TIP_FILTER) },
+  left: { x: makeSteady(ANCHOR_FILTER), y: makeSteady(ANCHOR_FILTER) },
+  right: { x: makeSteady(ANCHOR_FILTER), y: makeSteady(ANCHOR_FILTER) },
 };
+
+// ── The body's joints are slow, so they can be smoothed hard ──
+//
+// applyPose() used to publish the pose model's landmarks raw. That was harmless
+// while the body was only ever asked which way an elbow leaned -- a direction
+// survives a wobbling endpoint. It stopped being harmless the moment the hand
+// target became an offset FROM THE SHOULDER: every bit of noise on a shoulder
+// now moves the hand, on a model that is the `lite` one and samples at a third
+// of the hands' rate.
+//
+// A shoulder barely moves, so it can take a very low cutoff without any of the
+// lag that would cost on a hand. This is the quietest filter in the room.
+// A wider band than the hand's: a shoulder that has genuinely moved has moved
+// further than this, and one that appears to have moved less has not.
+const POSE_FILTER = { minCutoff: 1.0, beta: 3.0, dCutoff: 1.0, deadband: 0.008 };
+const poseFilters = new Map();
+
+function steady(key, point, now) {
+  if (!point) return null;
+  let filter = poseFilters.get(key);
+  if (!filter) {
+    filter = { x: makeSteady(POSE_FILTER), y: makeSteady(POSE_FILTER) };
+    poseFilters.set(key, filter);
+  }
+  return {
+    x: filter.x.filter(point.x, now),
+    y: filter.y.filter(point.y, now),
+    z: point.z,
+    visibility: point.visibility,
+  };
+}
+
+/** Forget every joint, so a body that comes back does not ease in from where
+ *  the last one stood. */
+function forgetPose() {
+  for (const filter of poseFilters.values()) { filter.x.reset(); filter.y.reset(); }
+}
 
 /** Attach a smoothed `anchor` to each hand, and forget the sides that left. */
 function anchorHands(sides, now) {
@@ -471,6 +531,7 @@ function applyResult(result) {
       // The body is only read while an arm is up, so let it go with the hand.
       // Holding it would leave the elbow bent the way it was when the hand left.
       frame.pose = null;
+      forgetPose();
       tipX.reset();
       tipY.reset();
     } else {
@@ -502,12 +563,26 @@ function applyResult(result) {
 function applyPose(body) {
   if (!body) {
     frame.pose = null;
+    forgetPose();
     return;
   }
   frame.pose = readPose(body.map((p) => ({
     x: 1 - p.x, y: p.y, z: p.z, visibility: p.visibility,
   })));
-  if (frame.pose) frame.poseAt = performance.now();
+  if (!frame.pose) {
+    forgetPose();
+    return;
+  }
+  // Smooth the two joints anything actually steers by. The wrist is left raw:
+  // the hand model tracks it better and faster, and nothing reads this one.
+  const now = performance.now();
+  for (const side of ['left', 'right']) {
+    const arm = frame.pose[side];
+    if (!arm) continue;
+    arm.shoulder = steady(`${side}.shoulder`, arm.shoulder, now);
+    arm.elbow = steady(`${side}.elbow`, arm.elbow, now);
+  }
+  frame.poseAt = now;
 }
 
 // ─── Read API ─────────────────────────────────────────────────────────────────

@@ -32,3 +32,46 @@ export function makeOneEuro({ minCutoff, beta, dCutoff }) {
     },
   };
 }
+
+/**
+ * A soft deadband: below `epsilon` of movement, nothing moves at all.
+ *
+ * One Euro REDUCES jitter; it cannot remove it. At the 15Hz the tracker
+ * manages, the constants that took a held-still wobble below a third of its
+ * size also put three frames of lag on a real swing -- measured, in
+ * one-euro.test.mjs. That is not a tuning problem, it is what a first-order
+ * lowpass is: stillness and speed come out of the same knob.
+ *
+ * A deadband is the other knob. It does nothing whatsoever to a movement bigger
+ * than the noise floor, and it takes a movement smaller than the noise floor to
+ * exactly zero -- not "reduced", zero, which is the only thing that actually
+ * looks like a hand being held still.
+ *
+ * Soft, not hard: the movement has epsilon SUBTRACTED rather than being ignored
+ * until it crosses. A hard band sticks and then jumps by a whole epsilon the
+ * moment it breaks, which reads worse than the jitter it replaced.
+ */
+export function makeDeadband(epsilon) {
+  let held = null;
+  return {
+    reset() { held = null; },
+    filter(x) {
+      if (held === null) { held = x; return x; }
+      const delta = x - held;
+      const size = Math.abs(delta);
+      if (size <= epsilon) return held;
+      held += Math.sign(delta) * (size - epsilon);
+      return held;
+    },
+  };
+}
+
+/** One Euro with a deadband behind it: the pair, since neither is enough. */
+export function makeSteady({ minCutoff, beta, dCutoff, deadband }) {
+  const euro = makeOneEuro({ minCutoff, beta, dCutoff });
+  const band = makeDeadband(deadband);
+  return {
+    reset() { euro.reset(); band.reset(); },
+    filter(x, t) { return band.filter(euro.filter(x, t)); },
+  };
+}
