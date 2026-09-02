@@ -18,7 +18,7 @@ import { isPinching, updateCast, currentStroke, resetMagic, RUNES, pinchDebug, T
 import { createBowState } from './spell-room/archery.js';
 import { createBoxingState } from './spell-room/boxing.js';
 import { createBowAim } from './spell-room/aim.js';
-import { createInputMode } from './spell-room/input-mode.js';
+import { createInputMode, SIGN_MODES } from './spell-room/input-mode.js';
 import { createBowView, DUEL_BOW_MOUNT } from './arena/bow-view.js';
 import { loadGLB } from './arena/asset-library.js';
 import { raySphereDistance, rayVerticalCapsuleDistance } from './arena/shot.js';
@@ -2021,6 +2021,14 @@ function drawHud(now, botState) {
       ? `WASD · BOW ${bowStringSide.toUpperCase()} STRING · RELEASE TO SHOOT${cooldown}`
       : `WASD · 1/2/3 ${selected} · TAB ${targetMode} · J/K cast · V ${forcedEye ? 'EYE' : 'chase'}${cooldown}`,
   24, height - 24);
+
+  // What the off hand is asking for. The whole reason the mode is a held-up
+  // number rather than a wrist angle is that the player can be sure of it --
+  // which only holds if they can see the game agreeing with them.
+  if (tracking && inputMode.sign !== null) {
+    ctx.fillStyle = GOLD;
+    ctx.fillText(`OFF HAND ${inputMode.sign} · ${SIGN_MODES[inputMode.sign] ?? 'held'}`, 24, height - 44);
+  }
   ctx.fillStyle = '#7f899f';
   if (lastCast && now - lastCastAt < 1800) {
     ctx.fillStyle = GOLD;

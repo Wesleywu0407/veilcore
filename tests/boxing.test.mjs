@@ -59,31 +59,12 @@ test('readStance says nothing inside the dead band', () => {
 });
 
 // ─── The mode it feeds ───────────────────────────────────────────────────────
-
-const both = tilt => [hand({ side: 'left', tilt }), hand({ side: 'right', tilt })];
-
-test('rolling the wrists moves between bow and fist, once each way', () => {
-  const input = createInputMode();
-  assert.equal(input.update(both(85)).mode, 'bow');
-  assert.deepEqual(input.update(both(5)), { mode: 'fist', previous: 'bow', changed: true });
-  assert.deepEqual(input.update(both(5)), { mode: 'fist', previous: 'fist', changed: false });
-  assert.deepEqual(input.update(both(85)), { mode: 'bow', previous: 'fist', changed: true });
-});
-
-test('an unreadable frame holds the stance rather than flipping it', () => {
-  const input = createInputMode();
-  input.update(both(5));
-  const dead = (BOXING.FLAT + BOXING.UPRIGHT) / 2;
-  assert.equal(input.update(both(dead)).mode, 'fist');
-  assert.equal(input.update([hand({ side: 'left', span: 0 }), hand({ side: 'right', span: 0 })]).mode, 'fist');
-  assert.equal(input.update(both(5)).mode, 'fist');
-});
-
-test('one hand still draws runes whatever the wrists are doing', () => {
-  const input = createInputMode();
-  input.update(both(5));
-  assert.deepEqual(input.update([hand({ tilt: 5 })]), { mode: 'magic', previous: 'fist', changed: true });
-});
+//
+// The three tests that used to sit here drove createInputMode by rolling the
+// wrists. The duel does not decide its mode that way any more -- the off hand
+// holds up a number instead -- so they now live in tests/input-mode.test.mjs,
+// posed as hand signs. readStance itself is still tested above; it is simply no
+// longer what the mode listens to.
 
 // ─── The punch ───────────────────────────────────────────────────────────────
 

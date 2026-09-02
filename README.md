@@ -163,8 +163,21 @@ shoulder while you draw a rune, and goes to your own eye whenever the bow or the
 fists come up. **V** holds it at the eye regardless — which is the only way to
 watch your own hand while casting one-handed, and it works with no webcam at all.
 
-Raise **one hand** to cast runes. Raise **both hands** for one of the two
-two-handed stances, and roll your wrists to say which:
+Raise **one hand** to cast runes. With **both hands** up, your off hand says
+which mode you are in by holding up a number:
+
+| off hand | |
+|---|---|
+| **fist** | guard — throw punches |
+| **one finger** | the rune hand is free to draw |
+| **two fingers** | take up the bow |
+
+The count has to hold for about an eighth of a second before it counts, so a
+landmark glitch cannot change your weapon. The HUD shows what it read.
+
+The wrist-roll stance below is no longer how the mode is chosen — it was silent
+whenever the two wrists disagreed, which near the boundary is most frames, and
+that meant the mode you got depended on the mode you were already in:
 
 - **Knuckles upright** — the fist eye pointing at the ceiling, the way a hand
   grips a bow riser — takes up the **bow**. Close one hand on the string, pull

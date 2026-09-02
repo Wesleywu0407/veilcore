@@ -86,6 +86,11 @@ export function knuckleTilt(landmarks) {
   return (Math.atan2(Math.abs(dy), Math.abs(dx)) * 180) / Math.PI;
 }
 
+// NOT wired up any more. The duel used to pick between the bow and the fists by
+// reading the roll of both wrists; it now reads a number held up on the off
+// hand instead (see input-mode.js, which explains why). Kept, and kept tested,
+// because the measurement is sound and the wrist roll may yet be worth having
+// as a second way in -- but nothing calls it today.
 /**
  * What two raised hands are holding: 'bow', 'fist', or null for "no opinion".
  *
