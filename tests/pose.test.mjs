@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { POSE, readPose, elbowHint } from '../js/spell-room/pose.js';
+import { POSE, readPose, elbowHint, sideOfWrist } from '../js/spell-room/pose.js';
 
 /**
  * A body standing square to the camera, already un-mirrored: the player's right
@@ -69,4 +69,38 @@ test('an elbow on top of its shoulder has no direction to report', () => {
   assert.equal(elbowHint({ shoulder: { x: 0.5, y: 0.5 }, elbow: { x: 0.5, y: 0.5 } }), null);
   assert.equal(elbowHint({ shoulder: { x: 0.5, y: 0.5 }, elbow: null }), null);
   assert.equal(elbowHint(null), null);
+});
+
+// ── Placing a lone hand ───────────────────────────────────────────────────────
+
+const at = (x, y) => ({ x, y, z: 0 });
+const bodyWrists = (leftX, rightX) => ({
+  left: { wrist: at(leftX, 0.5) },
+  right: { wrist: at(rightX, 0.5) },
+});
+
+test('a lone hand takes the side of the body wrist it is nearest', () => {
+  // Un-mirrored, the player's right hand has the larger x.
+  assert.equal(sideOfWrist(at(0.72, 0.5), bodyWrists(0.3, 0.7)), 'right');
+  assert.equal(sideOfWrist(at(0.28, 0.5), bodyWrists(0.3, 0.7)), 'left');
+});
+
+test('raising the left hand alone does not come back as the right one', () => {
+  // The bug this exists for: one hand in shot was always read as the right.
+  assert.equal(sideOfWrist(at(0.31, 0.44), bodyWrists(0.3, 0.7)), 'left');
+});
+
+test('a hand carried across the body still belongs to its own arm', () => {
+  // Right hand reaching left past the midline: x alone would call it the left.
+  assert.equal(sideOfWrist(at(0.66, 0.5), bodyWrists(0.3, 0.7)), 'right');
+});
+
+test('no body means no guess, which is what null has always meant', () => {
+  assert.equal(sideOfWrist(at(0.5, 0.5), null), null);
+  assert.equal(sideOfWrist(at(0.5, 0.5), { left: { wrist: at(0.3, 0.5) } }), null);
+  assert.equal(sideOfWrist(null, bodyWrists(0.3, 0.7)), null);
+});
+
+test('a dead heat is not an answer either', () => {
+  assert.equal(sideOfWrist(at(0.5, 0.5), bodyWrists(0.3, 0.7)), null);
 });

@@ -268,6 +268,11 @@ function trackedDirection(v, out) {
 
 function driveBody(frame) {
   const hands = frame.hands ?? [];
+  // A lone hand now arrives with its real side on it -- the body model places
+  // it, see sideOfWrist(). The null case is what is left when there is no body
+  // to ask, and there it still has to guess; the right hand is the guess the
+  // duel makes too. Before this, raising your left arm always moved the
+  // character's right one, because null was the ONLY answer a lone hand got.
   const right = hands.find(h => h.side === 'right')
     ?? (hands.length === 1 && hands[0].side === null ? hands[0] : null);
   const left = hands.find(h => h.side === 'left') ?? null;

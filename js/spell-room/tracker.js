@@ -17,7 +17,7 @@
 //      than a room with no webcam.
 
 import { LM, dist } from "./vec.js";
-import { readPose } from "./pose.js";
+import { readPose, sideOfWrist } from "./pose.js";
 import { makeOneEuro } from "./one-euro.js";
 
 export { LM, dist };
@@ -388,7 +388,9 @@ function applyResult(result) {
     sides[0].side = 'left';
     sides[1].side = 'right';
   } else if (sides.length === 1) {
-    sides[0].side = null;   // one hand alone cannot be placed; do not guess
+    // One hand cannot be placed by x -- but the body can place it, and null
+    // still means "no body to ask", which consumers already handle.
+    sides[0].side = sideOfWrist(sides[0].wrist, frame.pose);
   }
   anchorHands(sides, performance.now());
   frame.hands = sides.length ? sides : EMPTY_HANDS;

@@ -1693,10 +1693,19 @@ function driveFingers(frame) {
   if (!playerAvatar.hasFingers) return;
   const hands = frame.hands ?? [];
   for (const side of ['left', 'right']) {
-    const hand = hands.find(h => h.side === side)
-      // One hand alone has no side to compare against, so `frame.hands` leaves
-      // it null. It is the drawing hand, which is the right one.
-      ?? (hands.length === 1 && hands[0].side === null && side === 'right' ? hands[0] : null);
+    // One hand in shot is the drawing hand, and in the duel the drawing hand is
+    // the RIGHT one by construction -- reach() moves the right arm for it
+    // whichever of the player's hands it physically is. So its fingers have to
+    // be the right hand's too, or the duel animates one hand's fingers on the
+    // end of the other one's arm.
+    //
+    // This used to key off `side === null`, which held only while a lone hand
+    // could not be placed at all. The body model can place one now, so a player
+    // casting left-handed would arrive here labelled 'left'. The count is the
+    // sturdier test, and it says what the rule actually is.
+    const hand = hands.length === 1
+      ? (side === 'right' ? hands[0] : null)
+      : (hands.find(h => h.side === side) ?? null);
     playerAvatar.fingers(side, hand ? fingerCurls(hand.landmarks, _curls[side]) : null);
 
     // Only two directions are carried across, never the palm normal: the

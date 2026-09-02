@@ -90,3 +90,33 @@ export function elbowHint(arm) {
   if (!(length > 1e-4)) return null;
   return { x, y, length };
 }
+
+/**
+ * Which of the player's hands a lone tracked hand is, decided by the BODY.
+ *
+ * Two hands in shot sort by x and that settles it. One hand cannot be placed
+ * that way -- you can hold your right hand out on the left of the frame -- so
+ * the tracker reported `side: null`, and every consumer read that as the right
+ * one. In the duel that is true by construction: the rune hand IS the right
+ * hand. In the mirror it meant raising your left arm moved the character's
+ * right, every time.
+ *
+ * The body model does know. Its wrists have already been split into the
+ * player's own sides by comparing SHOULDERS, which does not care where a hand
+ * has wandered to, so matching the hand to the nearer of them is an answer
+ * rather than a guess. Returns null when there is no body to ask, or when the
+ * two are close enough together that the nearer one means nothing -- and null
+ * still means "do not guess", exactly as it did before.
+ *
+ * Note this is not MediaPipe's handedness label, which is computed before the
+ * un-mirroring and is wrong here on purpose. See AGENTS.md 4.
+ */
+export function sideOfWrist(wrist, pose) {
+  const left = pose?.left?.wrist;
+  const right = pose?.right?.wrist;
+  if (!wrist || !left || !right) return null;
+  const toLeft = Math.hypot(wrist.x - left.x, wrist.y - left.y);
+  const toRight = Math.hypot(wrist.x - right.x, wrist.y - right.y);
+  if (!(Math.abs(toLeft - toRight) > 1e-3)) return null;
+  return toLeft < toRight ? 'left' : 'right';
+}
