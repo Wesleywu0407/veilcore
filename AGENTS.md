@@ -78,6 +78,14 @@ game grabs the DOM by those. The in-game HUD is drawn on canvas in
 `js/arena.js`, so CSS cannot reach it — do not try to restyle the HUD in
 `index.html`.
 
+**Tracking runs in a worker, and it is a CLASSIC one.** `tracker-worker.js`
+owns MediaPipe; `tracker.js` owns the camera and everything downstream. Do not
+"modernise" it to `{ type: "module" }` -- MediaPipe loads its WASM glue with
+`importScripts()`, which module workers forbid outright, and the failure looks
+like a model-loading error rather than a worker one. The package ships no
+classic bundle, so the shape that works is a classic worker doing a dynamic
+`import()` of the .mjs.
+
 **Balance numbers live in `js/arena/config.js`, all of them.** Change values
 there, never at the call site. Same for `js/arena/bow-view.js` (the five bow
 placement numbers) and `DRAW_MIN`/`DRAW_FULL` in `js/spell-room/archery.js`.

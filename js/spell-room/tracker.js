@@ -16,12 +16,6 @@
 //      running. A room that white-screens because a webcam unplugged is worse
 //      than a room with no webcam.
 
-import {
-  FilesetResolver,
-  HandLandmarker,
-  PoseLandmarker,
-} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
-
 import { LM, dist } from "./vec.js";
 import { readPose } from "./pose.js";
 import { makeOneEuro } from "./one-euro.js";
@@ -54,11 +48,19 @@ let trackBody = true;
 const POSE_EVERY = 3;
 
 let video = null;
-let landmarker = null;
-let poseLandmarker = null;
+let worker = null;
+let bodyLoaded = false;
 let running = false;
 let lastVideoTime = -1;
 let detections = 0;
+// One frame in flight at a time.
+//
+// Without this the worker becomes a queue: the camera delivers faster than
+// inference finishes, the backlog grows, and every landmark that arrives is
+// describing a hand that moved on several frames ago. Latency you cannot see in
+// a frame counter but can absolutely feel. Dropping frames while busy keeps the
+// newest one always the one being worked on.
+let busy = false;
 
 // ─── Smoothing ────────────────────────────────────────────────────────────────
 //
@@ -185,53 +187,41 @@ export async function initTracker(videoEl, onStage = () => {}) {
     console.warn("[tracker] play() did not settle, continuing anyway:", err.message);
   });
 
-  onStage("loading the model (7.8 MB)");
-  const vision = await withTimeout(
-    FilesetResolver.forVisionTasks(WASM_ROOT), 30000, "WASM download",
-  );
+  // Everything from here happens in a worker. See tracker-worker.js for why:
+  // the short version is that inference and rendering were sharing one thread,
+  // so a near-empty scene rendered at 39-55 fps and the tracker stalled to 0 Hz.
+  onStage("starting the tracker");
+  // Classic, not a module worker -- see the top of tracker-worker.js. MediaPipe
+  // needs importScripts, and a module worker is forbidden from having it.
+  worker = new Worker(new URL("./tracker-worker.js", import.meta.url));
 
-  // GPU is faster but its init hangs on some Mac/Chrome combinations, and it
-  // hangs rather than throwing. Try it with a short leash, then fall back.
-  try {
-    landmarker = await withTimeout(
-      HandLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
-        runningMode: "VIDEO",
-        numHands: 2,
-      }),
-      15000, "GPU model load",
-    );
-  } catch (err) {
-    console.warn("[tracker] GPU delegate failed, falling back to CPU:", err.message);
-    onStage("GPU refused — retrying on CPU");
-    landmarker = await withTimeout(
-      HandLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: MODEL_URL, delegate: "CPU" },
-        runningMode: "VIDEO",
-        numHands: 2,
-      }),
-      30000, "CPU model load",
-    );
-  }
+  const started = new Promise((resolve, reject) => {
+    worker.onmessage = ({ data }) => {
+      if (data.type === "stage") onStage(data.stage);
+      else if (data.type === "ready") { bodyLoaded = data.body; resolve(); }
+      else if (data.type === "failed") reject(new Error(data.message));
+    };
+    // A worker that cannot even parse must not leave startup hanging.
+    worker.onerror = event => reject(new Error(event.message || "worker failed to start"));
+  });
 
-  // The body is a bonus, not a requirement. If it will not load -- an old
-  // browser, a blocked CDN, a machine that cannot afford a second model -- the
-  // duel carries on with hands only and the arms fall back to a fixed elbow
-  // hint, which is exactly what they did before this existed.
-  onStage("loading the body model (5.5 MB)");
-  try {
-    poseLandmarker = await withTimeout(
-      PoseLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate: "GPU" },
-        runningMode: "VIDEO",
-        numPoses: 1,
-      }),
-      15000, "GPU pose model load",
-    );
-  } catch (err) {
-    console.warn("[tracker] body model unavailable, hands only:", err.message);
-    poseLandmarker = null;
-  }
+  worker.postMessage({
+    type: "init",
+    wasmRoot: WASM_ROOT,
+    handModel: MODEL_URL,
+    poseModel: POSE_MODEL_URL,
+  });
+  await withTimeout(started, 45000, "tracker worker");
+
+  // Swap the startup handler for the running one now that it is up.
+  worker.onmessage = ({ data }) => {
+    if (data.type !== "result") return;
+    busy = false;
+    applyResult(data);
+    if (data.pose !== undefined) applyPose(data.pose);
+    detections++;
+    frame.detections = detections;
+  };
 
   onStage("ready");
   running = true;
@@ -249,27 +239,28 @@ export async function initTracker(videoEl, onStage = () => {}) {
 function detectLoop() {
   if (!running) return;
 
-  // detectForVideo() throws if handed the same timestamp twice, and the camera
-  // often delivers fewer frames than the display refreshes.
-  if (video.currentTime !== lastVideoTime) {
+  // Two gates. `currentTime` because the camera delivers fewer frames than the
+  // display refreshes and there is nothing new to look at otherwise; `busy`
+  // because the worker takes one frame at a time and a queue is just latency.
+  if (video.currentTime !== lastVideoTime && !busy) {
     lastVideoTime = video.currentTime;
-    const now = performance.now();
-    try {
-      applyResult(landmarker.detectForVideo(video, now));
-    } catch {
-      // A dropped frame is not an error worth stopping for.
-    }
-    // Separately try/caught: a body that fails must not cost us the hands,
-    // which are what the whole game is actually played with.
-    if (trackBody && poseLandmarker && frame.tracked && detections % POSE_EVERY === 0) {
-      try {
-        applyPose(poseLandmarker.detectForVideo(video, now));
-      } catch {
-        // Same again. The last body stands until a new one arrives.
-      }
-    }
-    detections++;
-    frame.detections = detections;
+    busy = true;
+    const timestamp = performance.now();
+    const wantBody = trackBody && bodyLoaded && frame.tracked
+      && detections % POSE_EVERY === 0;
+
+    // createImageBitmap is the one piece of per-frame work still on this
+    // thread. It decodes rather than infers -- a fraction of a millisecond
+    // against MediaPipe's fifteen -- and the handle transfers to the worker
+    // with no copy.
+    createImageBitmap(video).then(bitmap => {
+      if (!running) { bitmap.close(); return; }
+      worker.postMessage({ type: "frame", bitmap, timestamp, wantBody }, [bitmap]);
+    }).catch(() => {
+      // A frame the browser would not decode is not worth stopping for, but
+      // the gate has to be released or nothing is ever sent again.
+      busy = false;
+    });
   }
 
   requestAnimationFrame(detectLoop);
@@ -285,7 +276,7 @@ function applyResult(result) {
       wrist: lm[LM.WRIST],
       tip: lm[LM.INDEX_TIP],
       scale: dist(lm[LM.WRIST], lm[LM.MIDDLE_MCP]),
-      reported: result.handedness?.[i]?.[0]?.categoryName ?? null,
+      reported: result.handedness?.[i] ?? null,
     }))
     .sort((a, b) => a.wrist.x - b.wrist.x);
   if (sides.length === 2) {
@@ -337,8 +328,7 @@ function applyResult(result) {
  * pose.js to be split into sides. Nothing downstream should ever see a raw
  * MediaPipe LEFT_/RIGHT_ index.
  */
-function applyPose(result) {
-  const body = result?.landmarks?.[0];
+function applyPose(body) {
   if (!body) {
     frame.pose = null;
     return;
@@ -357,12 +347,12 @@ export function getFrame() {
 }
 
 export function isReady() {
-  return running && landmarker !== null;
+  return running && worker !== null;
 }
 
 /** Whether the body model loaded. False means the arms are on the fixed hint. */
 export function isBodyTracked() {
-  return poseLandmarker !== null;
+  return bodyLoaded;
 }
 
 /**
@@ -380,15 +370,16 @@ export function setBodyTracking(enabled) {
 }
 
 export function bodyTracking() {
-  return trackBody && poseLandmarker !== null;
+  return trackBody && bodyLoaded;
 }
 
 export function disposeTracker() {
   running = false;
-  landmarker?.close?.();
-  landmarker = null;
-  poseLandmarker?.close?.();
-  poseLandmarker = null;
+  busy = false;
+  worker?.postMessage({ type: "close" });
+  worker?.terminate();
+  worker = null;
+  bodyLoaded = false;
   frame.pose = null;
   const stream = video?.srcObject;
   if (stream) stream.getTracks().forEach((t) => t.stop());
