@@ -73,7 +73,17 @@ const errorLine = document.querySelector('[data-mirror-error]');
 const ctx = overlay.getContext('2d');
 
 const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+// ── The fill-rate test ──
+//
+// Tracking turned out not to be the constraint: with it off entirely the frame
+// rate does not move. So the next question is whether the renderer is limited
+// by how many PIXELS it fills, and that has a signature -- fill-rate cost
+// scales with resolution, a throttled machine does not. Halve this and if the
+// frame rate roughly doubles it is fill rate; if it barely moves the limit is
+// elsewhere and no amount of resolution work will help.
+const PIXEL_STEPS = [1.5, 1.0, 0.75, 0.5];
+let pixelStep = 0;
+renderer.setPixelRatio(Math.min(devicePixelRatio, PIXEL_STEPS[pixelStep]));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
@@ -271,7 +281,16 @@ function drawReadout(frame) {
   ctx.fillText(firstPerson ? 'V · FIRST PERSON' : 'V · ORBIT — drag to turn', 24, 124);
   ctx.fillText('no idle clip — only what is tracked moves', 24, 142);
 
-  let y = 176;
+  // What is actually being drawn, so the frame rate has something to be read
+  // against rather than being a bare number.
+  const info = renderer.info.render;
+  const px = renderer.domElement.width * renderer.domElement.height;
+  ctx.fillText(
+    `P · ${renderer.getPixelRatio().toFixed(2)}x — ${(px / 1e6).toFixed(2)} Mpx · `
+    + `${info.calls} draws · ${(info.triangles / 1000).toFixed(1)}k tris`,
+    24, 160);
+
+  let y = 194;
   for (const side of ['right', 'left']) {
     ctx.fillStyle = readout[side] ? BLUE : DIM;
     ctx.fillText(`${side.toUpperCase()} HAND${readout[side] ? '' : ' — not seen'}`, 24, y);
@@ -358,6 +377,11 @@ addEventListener('keydown', event => {
   // The comparison that was never actually made: what does this scene render at
   // with NO tracking at all? Everything so far has assumed the tracker was what
   // held it down, and that assumption has never been tested on its own.
+  if (event.code === 'KeyP') {
+    pixelStep = (pixelStep + 1) % PIXEL_STEPS.length;
+    renderer.setPixelRatio(Math.min(devicePixelRatio, PIXEL_STEPS[pixelStep]));
+    resize();
+  }
   if (event.code === 'KeyT') {
     trackerOn = !trackerOn;
     if (!trackerOn) disposeTracker();
