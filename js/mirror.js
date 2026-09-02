@@ -195,10 +195,19 @@ const _camBack = new THREE.Vector3();
 const _along = { left: new THREE.Vector3(), right: new THREE.Vector3() };
 const _across = { left: new THREE.Vector3(), right: new THREE.Vector3() };
 
-/** Straight through the one camera, at a fixed depth. Raw x -- see unflip(). */
-function handTarget(side, tip) {
-  return avatar.reachBox(side, 1 - tip.x, tip.y, _handTarget);
+/**
+ * Straight through the one camera, at a fixed depth. Raw x -- see unflip().
+ *
+ * `at` is the hand's smoothed WRIST, not its fingertip: the IK solves for the
+ * wrist bone, and hanging the arm off a fingertip both overreached it by a
+ * hand's length and turned every finger curl into a shoulder movement.
+ */
+function handTarget(side, at) {
+  return avatar.reachBox(side, 1 - at.x, at.y, _handTarget);
 }
+
+/** The point an arm follows. Falls back to the tip if a hand predates anchors. */
+const anchorOf = hand => hand.anchor ?? hand.tip;
 
 // A scratch for turning a body-space direction into a world one.
 const _origin = new THREE.Vector3();
@@ -269,13 +278,13 @@ function driveBody(frame) {
   // Same side throughout: reach() drives the duelist's RIGHT arm, and the
   // player's RIGHT hand is what feeds it.
   avatar.reach(
-    frame.tracked && right ? handTarget('right', right.tip) : null,
+    frame.tracked && right ? handTarget('right', anchorOf(right)) : null,
     0,
     false,
     frame.pose?.right ? elbowTarget('right', frame.pose.right) : null,
   );
   avatar.reachLeft(
-    frame.tracked && left ? handTarget('left', left.tip) : null,
+    frame.tracked && left ? handTarget('left', anchorOf(left)) : null,
     frame.pose?.left ? elbowTarget('left', frame.pose.left) : null,
   );
 

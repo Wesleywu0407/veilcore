@@ -100,6 +100,44 @@ const TIP_FILTER = {
 const tipX = makeOneEuro(TIP_FILTER);
 const tipY = makeOneEuro(TIP_FILTER);
 
+// ── Why an arm follows the WRIST and not the fingertip ──
+//
+// `tip` is the index fingertip, and it is the right point for drawing a rune:
+// it is the end of the wand. It is the wrong point to hang an arm off. The IK
+// solves for the WRIST bone, so feeding it the fingertip asked it to put the
+// wrist where the finger was -- the arm overreached by a hand's length -- and,
+// worse, it made every finger a shoulder movement: curl your fingers and the
+// whole arm swings. That is most of what "the arm keeps drifting" was.
+//
+// Smoothed, and per side, because `hands[].wrist` is raw. Only `frame.tip` was
+// ever filtered, so both arms in the mirror were being driven by landmarks
+// straight off the model, jitter and all, at 14-23Hz.
+const anchorFilters = {
+  left: { x: makeOneEuro(TIP_FILTER), y: makeOneEuro(TIP_FILTER) },
+  right: { x: makeOneEuro(TIP_FILTER), y: makeOneEuro(TIP_FILTER) },
+};
+
+/** Attach a smoothed `anchor` to each hand, and forget the sides that left. */
+function anchorHands(sides, now) {
+  const seen = new Set();
+  for (const hand of sides) {
+    // A lone hand has no side; the consumers all read it as the right one.
+    const key = hand.side ?? 'right';
+    seen.add(key);
+    const filter = anchorFilters[key];
+    hand.anchor = {
+      x: filter.x.filter(hand.wrist.x, now),
+      y: filter.y.filter(hand.wrist.y, now),
+    };
+  }
+  for (const key of ['left', 'right']) {
+    if (seen.has(key)) continue;
+    // A hand that comes back after a gap must not ease in from where it left.
+    anchorFilters[key].x.reset();
+    anchorFilters[key].y.reset();
+  }
+}
+
 // ─── Dropout grace ────────────────────────────────────────────────────────────
 //
 // Opening the fingers to release changes the hand's silhouette sharply, and
@@ -197,12 +235,23 @@ function spawnWorker(models) {
 function startBody(onStage) {
   const spawned = spawnWorker({ poseModel: POSE_MODEL_URL });
   spawned.onmessage = ({ data }) => {
+    // Every one of these has to move the stage on. The body posts "loading the
+    // body model" and, before this, posted nothing else a reader could see --
+    // so the line sat there in red for the rest of the session whether the load
+    // had succeeded, failed, or was still going. It read as a hang, and it hid
+    // the one fact that mattered: whether there was ever going to be an elbow.
     if (data.type === "stage") onStage(data.stage);
-    else if (data.type === "ready") { bodyWorker = spawned; bodyLoaded = true; }
+    else if (data.type === "ready") { bodyWorker = spawned; bodyLoaded = true; onStage("ready"); }
     else if (data.type === "result") { bodyBusy = false; applyPose(data.pose ?? null); }
-    else if (data.type === "failed") { bodyLoaded = false; bodyWorker = null; }
+    else if (data.type === "failed") {
+      bodyLoaded = false; bodyWorker = null;
+      onStage("no body model — elbows on the fixed hint");
+    }
   };
-  spawned.onerror = () => { bodyLoaded = false; bodyWorker = null; };
+  spawned.onerror = () => {
+    bodyLoaded = false; bodyWorker = null;
+    onStage("no body model — elbows on the fixed hint");
+  };
 }
 
 /**
@@ -341,6 +390,7 @@ function applyResult(result) {
   } else if (sides.length === 1) {
     sides[0].side = null;   // one hand alone cannot be placed; do not guess
   }
+  anchorHands(sides, performance.now());
   frame.hands = sides.length ? sides : EMPTY_HANDS;
 
   // The drawing hand stays whatever it has always been: the only hand when

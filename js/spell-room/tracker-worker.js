@@ -98,14 +98,34 @@ async function init({ wasmRoot, handModel, poseModel, delegate = "GPU" }) {
 
   if (poseModel) {
     stage("loading the body model (5.5 MB)");
-    pose = await withTimeout(
-      PoseLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: poseModel, delegate: "GPU" },
-        runningMode: "VIDEO",
-        numPoses: 1,
-      }),
-      15000, "GPU pose model load",
-    );
+    // The same GPU-then-CPU retry the hand model has had all along. It was
+    // missing here, so on any machine where the GPU delegate refuses -- and it
+    // refuses by HANGING, not by throwing, which is why the leash is short --
+    // the body model simply never arrived. No elbow hint, ever, and the only
+    // sign of it was a status line that never changed.
+    //
+    // Two workers now each ask for a GPU context, which is one more reason for
+    // this path to be taken rather than a theoretical one.
+    try {
+      pose = await withTimeout(
+        PoseLandmarker.createFromOptions(vision, {
+          baseOptions: { modelAssetPath: poseModel, delegate: "GPU" },
+          runningMode: "VIDEO",
+          numPoses: 1,
+        }),
+        15000, "GPU pose model load",
+      );
+    } catch {
+      stage("body model: GPU refused — retrying on CPU");
+      pose = await withTimeout(
+        PoseLandmarker.createFromOptions(vision, {
+          baseOptions: { modelAssetPath: poseModel, delegate: "CPU" },
+          runningMode: "VIDEO",
+          numPoses: 1,
+        }),
+        30000, "CPU pose model load",
+      );
+    }
   }
 
   self.postMessage({ type: "ready", body: pose !== null });
