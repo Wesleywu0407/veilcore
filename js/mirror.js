@@ -282,8 +282,14 @@ function driveBody(frame) {
   // -- null was the only answer a lone hand ever got. With a body loaded the
   // side lands within a sample or two, and holding both arms still for those
   // two frames is far better than moving the wrong one and snapping across.
+  // `bodySide` when the body could tell, `side` (sorted by x) when it could
+  // not. Crossing your arms swaps the x order and nothing else, so a mirror
+  // that only reads `side` hands each arm to the other one the moment you fold
+  // them -- an ordinary thing to do, and it looked like the handedness bug
+  // coming back.
+  const sideOf = hand => hand.bodySide ?? hand.side;
   const mayGuess = !bodyTracking();
-  const unplaced = hands.length === 1 && hands[0].side === null;
+  const unplaced = hands.length === 1 && sideOf(hands[0]) === null;
   if (unplaced && !mayGuess) {
     // The body has not named this hand yet. Do nothing at all -- not even pass
     // null to reach(), which RELEASES an arm rather than holding it, dropping
@@ -294,12 +300,15 @@ function driveBody(frame) {
     return;
   }
   const lone = unplaced ? hands[0] : null;
-  const right = hands.find(h => h.side === 'right') ?? lone;
-  const left = hands.find(h => h.side === 'left') ?? null;
+  const right = hands.find(h => sideOf(h) === 'right') ?? lone;
+  const left = hands.find(h => sideOf(h) === 'left') ?? null;
   placement = hands.length === 0 ? null
-    : hands.length === 2 ? 'both hands — sides by x'
+    : hands.length === 2
+      ? (hands[0].bodySide
+        ? `both hands — body says ${hands[0].bodySide === 'right' ? 'CROSSED' : 'not crossed'}`
+        : 'both hands — sides by x, no body answer')
     : unplaced ? 'one hand — guessing right, no body model'
-    : `one hand — body says ${hands[0].side}`;
+    : `one hand — body says ${sideOf(hands[0])}`;
 
   // Both arms, because a mirror with one live arm and one hanging is not a
   // mirror. The duel drives only the right; there the left is always holding

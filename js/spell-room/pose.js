@@ -134,15 +134,65 @@ export function sideOfWrist(wrist, pose) {
  * `forget()` on a dropout, so putting one hand down and raising the other does
  * not inherit the first one's side.
  */
-export function createSideLatch() {
-  let side = null;
+export function createLatch() {
+  let held = null;
   return {
-    get side() { return side; },
+    get value() { return held; },
     /** Take one frame's answer -- `null` meaning "the body did not say". */
     settle(asked) {
-      if (asked === 'left' || asked === 'right') side = asked;
-      return side;
+      if (asked !== null && asked !== undefined) held = asked;
+      return held;
     },
-    forget() { side = null; },
+    forget() { held = null; },
   };
+}
+
+/** A latch that will only ever hold a side. */
+export function createSideLatch() {
+  const latch = createLatch();
+  return {
+    get side() { return latch.value; },
+    settle(asked) {
+      return latch.settle(asked === 'left' || asked === 'right' ? asked : null);
+    },
+    forget() { latch.forget(); },
+  };
+}
+
+// How much cheaper one pairing has to be than the other before it is believed,
+// in frame widths. Below this the two hands are close enough together that the
+// nearer body wrist means nothing, and a bare comparison would flip every frame.
+const CROSS_MARGIN = 0.02;
+
+/**
+ * Whether two hands in shot are CROSSED -- the left one in the picture being
+ * the player's right, and the other way about.
+ *
+ * Two hands are sided by x, and that is right almost always and cheap always.
+ * It has one failure, and it is not a rare one in a mirror: fold your arms, or
+ * reach across yourself, and the sides swap. The duel never noticed because
+ * archery never crosses the arms -- but a body that is supposed to copy you
+ * has to survive you doing an ordinary thing with your arms.
+ *
+ * Read as an assignment rather than two separate nearest-wrist questions: each
+ * body wrist can only be one hand, so compare the two possible pairings by
+ * total distance and take the cheaper. Asking each hand independently lets both
+ * of them claim the same wrist, which is worse than x-sorting rather than
+ * better.
+ *
+ * `low` and `high` are the two hands' wrists, sorted by x. Returns null when
+ * there is no body to ask or the two pairings are too close to call, which
+ * callers should read as "keep whatever x said".
+ */
+export function handsCrossed(low, high, pose) {
+  const left = pose?.left?.wrist;
+  const right = pose?.right?.wrist;
+  if (!low || !high || !left || !right) return null;
+  const gap = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  // Un-mirrored, the player's left has the smaller x -- so "not crossed" pairs
+  // the low hand with the left wrist.
+  const straight = gap(low, left) + gap(high, right);
+  const crossed = gap(low, right) + gap(high, left);
+  if (Math.abs(straight - crossed) < CROSS_MARGIN) return null;
+  return crossed < straight;
 }

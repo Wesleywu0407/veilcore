@@ -17,7 +17,7 @@
 //      than a room with no webcam.
 
 import { LM, dist } from "./vec.js";
-import { readPose, sideOfWrist, createSideLatch } from "./pose.js";
+import { readPose, sideOfWrist, createSideLatch, createLatch, handsCrossed } from "./pose.js";
 import { makeOneEuro } from "./one-euro.js";
 
 export { LM, dist };
@@ -79,6 +79,10 @@ let bodyBusy = false;
 
 // The side of a single raised hand, held between body samples. See pose.js.
 const loneSide = createSideLatch();
+
+// Whether two hands in shot are crossed. Latched for the same reason the lone
+// side is: the body model is sampled, so most frames have no answer at all.
+const crossed = createLatch();
 
 // ─── Smoothing ────────────────────────────────────────────────────────────────
 //
@@ -175,6 +179,12 @@ const frame = {
   // the right hand simply has the larger x. Archery never crosses the arms, so
   // position is the sturdier signal. The label is passed through as `reported`
   // for anyone who wants to compare.
+  //
+  // Each hand also carries `bodySide`: the same question answered by the BODY
+  // rather than by x, which is the only one of the two that survives crossed
+  // arms. Null when there is no body to ask. `side` is deliberately left alone
+  // so the duel keeps the behaviour it was built on; consumers that need to
+  // handle crossing read `bodySide ?? side`.
   hands: [],
 
   // The body, when the pose model is loaded and can see one. Null otherwise --
@@ -388,14 +398,28 @@ function applyResult(result) {
     }))
     .sort((a, b) => a.wrist.x - b.wrist.x);
   if (sides.length === 2) {
+    // `side` stays exactly what it has always been -- sorted by x. The duel
+    // reads it, archery never crosses the arms, and there is no reason to put
+    // that at risk for a case it cannot hit.
     sides[0].side = 'left';
     sides[1].side = 'right';
+    // `bodySide` is the additional answer, for consumers that DO have to
+    // survive crossed arms. Null when the body cannot tell, which reads as
+    // "keep what x said".
+    const isCrossed = crossed.settle(
+      handsCrossed(sides[0].wrist, sides[1].wrist, frame.pose));
+    sides[0].bodySide = isCrossed === null ? null : isCrossed ? 'right' : 'left';
+    sides[1].bodySide = isCrossed === null ? null : isCrossed ? 'left' : 'right';
     loneSide.forget();
   } else if (sides.length === 1) {
+    crossed.forget();
     // One hand cannot be placed by x -- but the body can place it. The latch
     // keeps that answer while the body model is between samples, so the side
     // does not flicker back to null every frame the pose is missing.
     sides[0].side = loneSide.settle(sideOfWrist(sides[0].wrist, frame.pose));
+    // For one hand the two answers are the same one: `side` already came from
+    // the body. Carrying it as well keeps consumers to a single rule.
+    sides[0].bodySide = sides[0].side;
   }
   anchorHands(sides, performance.now());
   frame.hands = sides.length ? sides : EMPTY_HANDS;
@@ -414,6 +438,7 @@ function applyResult(result) {
       // hand down and raising the left moves the right arm until the body
       // catches up.
       loneSide.forget();
+      crossed.forget();
       // The body is only read while an arm is up, so let it go with the hand.
       // Holding it would leave the elbow bent the way it was when the hand left.
       frame.pose = null;

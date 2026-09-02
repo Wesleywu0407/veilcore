@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { POSE, readPose, elbowHint, sideOfWrist, createSideLatch } from '../js/spell-room/pose.js';
+import { POSE, readPose, elbowHint, sideOfWrist, createSideLatch, createLatch, handsCrossed } from '../js/spell-room/pose.js';
 
 /**
  * A body standing square to the camera, already un-mirrored: the player's right
@@ -135,4 +135,42 @@ test('forgetting means the next hand up is asked afresh', () => {
   assert.equal(latch.side, null);
   assert.equal(latch.settle(null), null);
   assert.equal(latch.settle('left'), 'left');
+});
+
+// ── Crossed arms ──────────────────────────────────────────────────────────────
+
+test('arms hanging normally are not crossed', () => {
+  // Un-mirrored: the player's left has the smaller x.
+  assert.equal(handsCrossed(at(0.32, 0.5), at(0.68, 0.5), bodyWrists(0.3, 0.7)), false);
+});
+
+test('folded arms are seen as crossed rather than swapping the sides', () => {
+  // Each hand has travelled past the other, so x order now lies.
+  assert.equal(handsCrossed(at(0.34, 0.5), at(0.66, 0.5), bodyWrists(0.7, 0.3)), true);
+});
+
+test('the pairing is solved together, not one hand at a time', () => {
+  // Both hands are nearest the SAME body wrist. Asked independently they would
+  // both claim it; asked as a pairing, the cheaper total wins and they split.
+  const pose = bodyWrists(0.30, 0.34);
+  const answer = handsCrossed(at(0.31, 0.5), at(0.80, 0.5), pose);
+  assert.equal(answer, false, 'the far hand still has to take the far wrist');
+});
+
+test('two hands too close together is not an answer', () => {
+  assert.equal(handsCrossed(at(0.5, 0.5), at(0.5, 0.5), bodyWrists(0.3, 0.7)), null);
+});
+
+test('no body means keep whatever x said', () => {
+  assert.equal(handsCrossed(at(0.3, 0.5), at(0.7, 0.5), null), null);
+  assert.equal(handsCrossed(null, at(0.7, 0.5), bodyWrists(0.3, 0.7)), null);
+});
+
+test('the generic latch holds anything that is not null', () => {
+  const latch = createLatch();
+  assert.equal(latch.value, null);
+  assert.equal(latch.settle(false), false, 'false is an answer, not an absence');
+  assert.equal(latch.settle(null), false, 'and it survives the frames with none');
+  latch.forget();
+  assert.equal(latch.value, null);
 });
