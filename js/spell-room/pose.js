@@ -43,6 +43,11 @@ export const HEAD_GAIN = 1.55;
 // rather than merely safe.
 export const HEAD_LIMIT = 1.05;   // 60 degrees
 
+// Pitch is a smaller range than yaw on a real neck, and a noisier reading, so
+// it gets less of both. The gain is per unit of `lift` -- see readHead().
+export const HEAD_PITCH_GAIN = 1.1;
+export const HEAD_PITCH_LIMIT = 0.6;   // 34 degrees
+
 // MediaPipe reports how sure it is that a joint is actually in shot. An elbow
 // behind the torso still gets coordinates, and they are a guess; feeding that
 // guess to the IK as a bend hint is worse than falling back to the fixed pole,
@@ -229,14 +234,18 @@ export function shoulderSpan(pose) {
 }
 
 /**
- * Which way the head is turned, in radians, positive toward the player's OWN
- * left. Null when there is no readable face.
+ * Which way the head is pointed. `{ yaw, lift }`, or null with no readable face.
  *
- * Yaw only. Pitch is available from the same three points and is not returned,
- * because it cannot be had honestly without calibration: a nose sits below the
- * ear line at rest by an amount that differs per face, so "looking level" is a
- * per-person constant and any fixed one is somebody else's face. Yaw has no
- * such offset -- a head facing the lens is symmetric, whoever it belongs to.
+ * `yaw` is finished: radians, positive toward the player's OWN left. A head
+ * facing the lens is symmetric whoever it belongs to, so there is no per-person
+ * constant in it.
+ *
+ * `lift` is NOT. It is the raw height of the nose above the ear line, in ear
+ * spans, and it carries a per-face offset: everyone's nose sits below their own
+ * ears at rest, by an amount that is theirs. Turning it into a pitch needs to
+ * know where THIS face's level is -- see createHeadLevel(). Returning it raw,
+ * rather than a pitch computed against somebody else's face, is the difference
+ * between a number that can be calibrated and one that is quietly wrong.
  *
  * ── Why a ratio of distances, not the nose's offset ──
  *
@@ -269,12 +278,15 @@ export function readHead(landmarks) {
   // would turn the character's head back. In practice the far ear also stops
   // being visible around there and this returns null anyway, but a fold-back
   // that is only prevented by luck is not prevented.
+  // Nose above the ear line, in ear spans. Signed: positive is looking up.
+  const lift = ((leftEar.y + rightEar.y) / 2 - nose.y) / span;
+
   const axisX = rightEar.x - leftEar.x;
   const axisY = rightEar.y - leftEar.y;
   const along =
     ((nose.x - leftEar.x) * axisX + (nose.y - leftEar.y) * axisY) / (span * span);
-  if (along <= 0) return HEAD_LIMIT;    // nose past the left ear: fully turned left
-  if (along >= 1) return -HEAD_LIMIT;
+  if (along <= 0) return { yaw: HEAD_LIMIT, lift };   // nose past the left ear
+  if (along >= 1) return { yaw: -HEAD_LIMIT, lift };
 
   const toLeft = Math.hypot(nose.x - leftEar.x, nose.y - leftEar.y);
   const toRight = Math.hypot(nose.x - rightEar.x, nose.y - rightEar.y);
@@ -283,5 +295,56 @@ export function readHead(landmarks) {
 
   // Nose nearer the left ear means the head has turned to the player's left.
   const turn = (toRight - toLeft) / total;
-  return Math.max(-HEAD_LIMIT, Math.min(HEAD_LIMIT, turn * HEAD_GAIN));
+  return { yaw: Math.max(-HEAD_LIMIT, Math.min(HEAD_LIMIT, turn * HEAD_GAIN)), lift };
+}
+
+/**
+ * Where THIS face's "looking level" is.
+ *
+ * A nose sits below its own ear line at rest, and by how much is a fact about
+ * one person's skull. Without knowing it there is no way to tell a head tilted
+ * down from a head that simply has that face on it, so a fixed constant here
+ * would mean everyone but one person is permanently looking somewhere they are
+ * not. That is why pitch waited for this and yaw did not.
+ *
+ * Levels itself from a stretch of stillness rather than demanding a ritual, and
+ * `set()` overrides whenever the player wants to redo it. Only samples taken
+ * while the head is FACING FORWARD count: a lift measured mid-turn is a lift
+ * measured on a foreshortened face, and would bake the turn into the rest.
+ */
+export function createHeadLevel({ window = 900, spread = 0.05, minSamples = 8 } = {}) {
+  let rest = null;
+  let seen = [];
+  return {
+    get rest() { return rest; },
+    get ready() { return rest !== null; },
+    /** Take this lift as level, now. */
+    set(lift) {
+      if (!Number.isFinite(lift)) return rest;
+      rest = lift;
+      seen = [];
+      return rest;
+    },
+    forget() { rest = null; seen = []; },
+    /** One frame. Returns the rest value once there is one, else null. */
+    feed(yaw, lift, now) {
+      if (rest !== null) return rest;
+      if (!Number.isFinite(lift) || Math.abs(yaw) > 0.15) { seen = []; return null; }
+      seen.push({ t: now, lift });
+      seen = seen.filter(sample => now - sample.t <= window);
+      if (seen.length < minSamples || now - seen[0].t < window * 0.6) return null;
+      const lifts = seen.map(sample => sample.lift).sort((a, b) => a - b);
+      // A spread this wide is a head that was moving, not one being held still.
+      if (lifts[lifts.length - 1] - lifts[0] > spread) return null;
+      rest = lifts[Math.floor(lifts.length / 2)];      // median, not mean
+      return rest;
+    },
+  };
+}
+
+/** A calibrated pitch, in radians, positive looking UP. */
+export function headPitch(lift, rest) {
+  if (rest === null || rest === undefined || !Number.isFinite(lift)) return 0;
+  const pitch = (lift - rest) * HEAD_PITCH_GAIN;
+  return Math.max(-HEAD_PITCH_LIMIT, Math.min(HEAD_PITCH_LIMIT, pitch));
 }

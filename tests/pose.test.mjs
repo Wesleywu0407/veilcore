@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { POSE, readPose, elbowHint, sideOfWrist, createSideLatch, createLatch, handsCrossed,
-  readHead, HEAD_LIMIT } from '../js/spell-room/pose.js';
+  readHead, HEAD_LIMIT, headPitch, createHeadLevel,
+  HEAD_PITCH_LIMIT } from '../js/spell-room/pose.js';
 
 /**
  * A body standing square to the camera, already un-mirrored: the player's right
@@ -182,6 +183,8 @@ test('the generic latch holds anything that is not null', () => {
  *  the nose between the ears; the ears foreshorten as it does, exactly as a
  *  real head's do, so the estimator is tested against the thing that breaks the
  *  obvious one. */
+const yawOf = lm => { const read = readHead(lm); return read === null ? null : read.yaw; };
+
 function face(turn = 0) {
   const lm = new Array(33).fill(null).map(() => ({ x: 0.5, y: 0.5, z: 0, visibility: 0.9 }));
   const half = 0.06 * Math.cos(turn * Math.PI / 3);      // ears close up as it turns
@@ -192,20 +195,20 @@ function face(turn = 0) {
 }
 
 test('a head facing the lens is not turned', () => {
-  assert.ok(Math.abs(readHead(face(0))) < 1e-9);
+  assert.ok(Math.abs(yawOf(face(0))) < 1e-9);
 });
 
 test('turning to your own left reads positive, and right negative', () => {
   // After the un-mirroring the player's left is the smaller x, so the nose
   // moving that way is a turn to their own left.
-  assert.ok(readHead(face(0.6)) > 0.2, 'left should be positive');
-  assert.ok(readHead(face(-0.6)) < -0.2, 'right should be negative');
+  assert.ok(yawOf(face(0.6)) > 0.2, 'left should be positive');
+  assert.ok(yawOf(face(-0.6)) < -0.2, 'right should be negative');
 });
 
 test('the reading grows with the turn instead of running away', () => {
   // The failure of the obvious estimator: divide by the ear span and the answer
   // explodes just as the head gets interesting, because the span is shrinking.
-  const steps = [0.2, 0.4, 0.6, 0.8].map(t => readHead(face(t)));
+  const steps = [0.2, 0.4, 0.6, 0.8].map(t => yawOf(face(t)));
   for (let i = 1; i < steps.length; i++) {
     assert.ok(steps[i] > steps[i - 1], `not monotonic at step ${i}`);
   }
@@ -220,7 +223,7 @@ test('turning further never turns the head back', () => {
   let worst = 0;
   let previous = null;
   for (let t = 0.05; t <= 2; t += 0.05) {
-    const reading = readHead(face(t));
+    const reading = yawOf(face(t));
     // null is "cannot read this face", not "read a smaller number" -- past far
     // enough the ears land on top of each other and there is nothing to say.
     if (reading === null) { previous = null; continue; }
@@ -235,17 +238,90 @@ test('turning further never turns the head back', () => {
 });
 
 test('a turn and its mirror are the same size', () => {
-  assert.ok(Math.abs(readHead(face(0.5)) + readHead(face(-0.5))) < 1e-9);
+  assert.ok(Math.abs(yawOf(face(0.5)) + yawOf(face(-0.5))) < 1e-9);
 });
 
 test('no readable face is null, not zero', () => {
   // Zero would mean "facing you", which is a claim. Null is the absence of one.
-  assert.equal(readHead(null), null);
-  assert.equal(readHead([]), null);
+  assert.equal(yawOf(null), null);
+  assert.equal(yawOf([]), null);
   const noEars = face(0); noEars[POSE.EARS[0]] = { x: 0, y: 0, visibility: 0.1 };
-  assert.equal(readHead(noEars), null);
+  assert.equal(yawOf(noEars), null);
   const sideOn = face(0);
   sideOn[POSE.EARS[0]] = { x: 0.5, y: 0.4, visibility: 0.9 };
   sideOn[POSE.EARS[1]] = { x: 0.505, y: 0.4, visibility: 0.9 };
-  assert.equal(readHead(sideOn), null, 'ears on top of each other says nothing');
+  assert.equal(yawOf(sideOn), null, 'ears on top of each other says nothing');
+});
+
+// ── Levelling a pitch against the face it belongs to ──────────────────────────
+
+/** The same face, raised or lowered: the nose moves relative to the ear line. */
+function facing(turn, lift) {
+  const lm = face(turn);
+  const span = Math.abs(lm[POSE.EARS[1]].x - lm[POSE.EARS[0]].x);
+  lm[POSE.NOSE].y = (lm[POSE.EARS[0]].y + lm[POSE.EARS[1]].y) / 2 - lift * span;
+  return lm;
+}
+
+test('lift is raw, and two different faces at rest give different numbers', () => {
+  // The whole reason pitch waited for calibration. Neither of these is looking
+  // anywhere -- they just have different noses.
+  const shallow = readHead(facing(0, -0.30)).lift;
+  const deep = readHead(facing(0, -0.55)).lift;
+  assert.ok(Math.abs(shallow - deep) > 0.2, 'a fixed constant would libel one of them');
+});
+
+test('an unlevelled pitch is zero, not a guess', () => {
+  assert.equal(headPitch(readHead(facing(0, -0.4)).lift, null), 0);
+});
+
+test('once levelled, the same face reads level', () => {
+  const rest = readHead(facing(0, -0.4)).lift;
+  assert.ok(Math.abs(headPitch(rest, rest)) < 1e-9);
+});
+
+test('raising the nose past its own level reads as looking up', () => {
+  const rest = readHead(facing(0, -0.4)).lift;
+  assert.ok(headPitch(readHead(facing(0, -0.15)).lift, rest) > 0.1, 'up is positive');
+  assert.ok(headPitch(readHead(facing(0, -0.65)).lift, rest) < -0.1, 'down is negative');
+});
+
+test('pitch is clamped to something a neck can do', () => {
+  const rest = readHead(facing(0, -0.4)).lift;
+  assert.ok(Math.abs(headPitch(readHead(facing(0, 3)).lift, rest)) <= HEAD_PITCH_LIMIT);
+  assert.ok(Math.abs(headPitch(readHead(facing(0, -3)).lift, rest)) <= HEAD_PITCH_LIMIT);
+});
+
+test('levelling waits for stillness rather than trusting one frame', () => {
+  const level = createHeadLevel();
+  assert.equal(level.feed(0, -0.4, 0), null, 'one frame is not a level');
+  assert.equal(level.ready, false);
+  let now = 0;
+  for (let i = 0; i < 12; i++) { now += 90; level.feed(0, -0.4 + (i % 2) * 0.001, now); }
+  assert.equal(level.ready, true);
+  assert.ok(Math.abs(level.rest + 0.4) < 0.01);
+});
+
+test('a head that is moving never levels', () => {
+  const level = createHeadLevel();
+  let now = 0;
+  for (let i = 0; i < 40; i++) { now += 90; level.feed(0, -0.4 + i * 0.02, now); }
+  assert.equal(level.ready, false, 'a sweep is not a rest position');
+});
+
+test('a level is never taken while the head is turned', () => {
+  // A lift read mid-turn is read on a foreshortened face; baking that in would
+  // put the turn permanently into "level".
+  const level = createHeadLevel();
+  let now = 0;
+  for (let i = 0; i < 40; i++) { now += 90; level.feed(0.9, -0.4, now); }
+  assert.equal(level.ready, false);
+});
+
+test('the player can always overrule it', () => {
+  const level = createHeadLevel();
+  level.set(-0.31);
+  assert.equal(level.rest, -0.31);
+  level.forget();
+  assert.equal(level.ready, false);
 });

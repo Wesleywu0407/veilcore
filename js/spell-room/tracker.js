@@ -17,7 +17,10 @@
 //      than a room with no webcam.
 
 import { LM, dist } from "./vec.js";
-import { readPose, readHead, sideOfWrist, createSideLatch, createLatch, handsCrossed } from "./pose.js";
+import {
+  readPose, readHead, headPitch, createHeadLevel,
+  sideOfWrist, createSideLatch, createLatch, handsCrossed,
+} from "./pose.js";
 import { makeOneEuro, makeSteady } from "./one-euro.js";
 
 export { LM, dist };
@@ -166,7 +169,9 @@ const poseFilters = new Map();
 // A head turn is in radians, not frame widths, so it gets its own band: about
 // two degrees, which is under what anyone can hold still to anyway.
 const HEAD_FILTER = { minCutoff: 1.0, beta: 2.0, dCutoff: 1.0, deadband: 0.035 };
-const headFilter = makeSteady(HEAD_FILTER);
+const yawFilter = makeSteady(HEAD_FILTER);
+const pitchFilter = makeSteady(HEAD_FILTER);
+const headLevel = createHeadLevel();
 
 function steady(key, point, now) {
   if (!point) return null;
@@ -187,7 +192,8 @@ function steady(key, point, now) {
  *  the last one stood. */
 function forgetPose() {
   for (const filter of poseFilters.values()) { filter.x.reset(); filter.y.reset(); }
-  headFilter.reset();
+  yawFilter.reset();
+  pitchFilter.reset();
 }
 
 /** Attach a smoothed `anchor` to each hand, and forget the sides that left. */
@@ -264,9 +270,11 @@ const frame = {
   pose: null,
   poseAt: 0,
 
-  // Which way the head is turned, in radians, positive toward the player's own
-  // left. Null when there is no face to read -- which includes every frame
-  // before the body model lands, so consumers must handle it.
+  // Where the head is pointed, or null when there is no face to read -- which
+  // includes every frame before the body model lands, so consumers must handle
+  // it. `{ yaw, pitch, lift, levelled }`, radians, yaw positive toward the
+  // player's own left and pitch positive looking up. `pitch` is zero until
+  // `levelled`, because before that there is nothing to measure it against.
   head: null,
 
   // What the tracker still costs THIS thread, per frame, in milliseconds.
@@ -583,8 +591,21 @@ function applyPose(body) {
     x: 1 - p.x, y: p.y, z: p.z, visibility: p.visibility,
   }));
   frame.pose = readPose(flipped);
-  const yaw = readHead(flipped);
-  frame.head = yaw === null ? null : headFilter.filter(yaw, performance.now());
+  const read = readHead(flipped);
+  if (!read) {
+    frame.head = null;
+  } else {
+    const now = performance.now();
+    // Level first, so the very frames that establish it are already usable.
+    headLevel.feed(read.yaw, read.lift, now);
+    frame.head = {
+      yaw: yawFilter.filter(read.yaw, now),
+      pitch: pitchFilter.filter(headPitch(read.lift, headLevel.rest), now),
+      // Raw, so a caller can offer to re-level from what it is seeing now.
+      lift: read.lift,
+      levelled: headLevel.ready,
+    };
+  }
   if (!frame.pose) {
     forgetPose();
     return;
@@ -651,3 +672,24 @@ export function disposeTracker() {
   if (video) video.srcObject = null;
 }
 
+// ─── Head levelling ───────────────────────────────────────────────────────────
+
+/**
+ * Take the head's current position as "looking level", and return the value so
+ * a caller can remember it across sessions. Null if there is no face in shot --
+ * levelling off nothing would be worse than not levelling at all.
+ */
+export function levelHead() {
+  const lift = frame.head?.lift;
+  if (!Number.isFinite(lift)) return null;
+  pitchFilter.reset();
+  return headLevel.set(lift);
+}
+
+/** Restore a level found in an earlier session. */
+export function setHeadLevel(rest) {
+  if (!Number.isFinite(rest)) return false;
+  headLevel.set(rest);
+  pitchFilter.reset();
+  return true;
+}

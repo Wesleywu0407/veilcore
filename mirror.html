@@ -17,7 +17,25 @@
        stretching it, and on a 2x display you see the top-left quarter. */
     .mirror-gl { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; }
     .mirror-overlay { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
-    .mirror-video { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; top: 0; left: 0; }
+    /* The camera, shown. It was a 1x1 transparent pixel -- enough to feed the
+       tracker and useless to the person being tracked, who could not tell a
+       lost hand from a wrong mapping without seeing what the lens saw.
+       Mirrored, because a preview of yourself that is not mirrored is the one
+       thing everybody finds unusable. C toggles it. */
+    .mirror-video {
+      position: fixed; right: 18px; bottom: 18px; width: 260px;
+      transform: scaleX(-1); border-radius: 6px; opacity: 0.9;
+      border: 1px solid #2a3350; pointer-events: none; z-index: 3;
+      background: #05070d;
+    }
+    .mirror-video[hidden] { display: none; }
+    /* Landmarks are drawn on top of it, in its own coordinates. */
+    .mirror-scan {
+      position: fixed; right: 18px; bottom: 18px; width: 260px;
+      transform: scaleX(-1); border-radius: 6px;
+      pointer-events: none; z-index: 4;
+    }
+    .mirror-scan[hidden] { display: none; }
     .mirror-start {
       position: fixed; inset: 0; z-index: 2;
       display: grid; place-content: center; justify-items: center; gap: 16px;
@@ -44,7 +62,8 @@
 <body>
   <canvas class="mirror-gl" data-mirror-gl></canvas>
   <canvas class="mirror-overlay" data-mirror-overlay></canvas>
-  <video class="mirror-video" data-mirror-video playsinline muted autoplay></video>
+  <video class="mirror-video" data-mirror-video playsinline muted autoplay hidden></video>
+  <canvas class="mirror-scan" data-mirror-scan hidden></canvas>
 
   <section class="mirror-start" data-mirror-start>
     <p class="mirror-kicker">VEILCORE · MIRROR</p>

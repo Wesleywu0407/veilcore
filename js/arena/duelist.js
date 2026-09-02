@@ -376,6 +376,7 @@ const HEAD_TRACK = 9;
 function collectHeadRig(model) {
   model.updateMatrixWorld(true);
   const up = new THREE.Vector3(0, 1, 0);
+  const left = new THREE.Vector3(1, 0, 0);   // local +X is this body's left
   const bones = [];
   for (const [name, share] of [['neck', NECK_SHARE], ['Head', 1 - NECK_SHARE]]) {
     const bone = model.getObjectByName(name);
@@ -385,7 +386,12 @@ function collectHeadRig(model) {
       bone,
       share,
       rest: bone.quaternion.clone(),
-      axis: up.clone().applyQuaternion(inverse).normalize(),
+      // Body up and body left, both expressed in this bone's own space at bind.
+      // Captured rather than assumed to be Y and X: a bone's local axes are
+      // whatever it was exported with, and this one is named `neck` in
+      // lowercase beside a `Head` in capitals, which is fair warning.
+      yawAxis: up.clone().applyQuaternion(inverse).normalize(),
+      pitchAxis: left.clone().applyQuaternion(inverse).normalize(),
     });
   }
   return bones.length ? bones : null;
@@ -613,8 +619,10 @@ export function createDuelist(scene, {
   let shoulderLocal = null;  // right shoulder position in root space
   let leftShoulderLocal = null;
   let headRig = null;
-  let headTarget = null;   // radians, positive toward this body's own left
+  let headTarget = null;        // radians, positive toward this body's own left
+  let headPitchTarget = 0;      // radians, positive looking up
   let headLive = 0;
+  let headPitchLive = 0;
   // The draw, or null when the bow is down. Held as a whole pose rather than a
   // number so the side can change: archery.js picks the string hand from which
   // hand the player actually closed, and the body should copy that rather than
@@ -710,12 +718,15 @@ export function createDuelist(scene, {
      * hands' rate is the noisiest signal in the room and a head is the thing a
      * viewer looks at hardest.
      */
-    look(yaw) {
+    look(yaw, pitch = 0) {
       headTarget = Number.isFinite(yaw) ? clamp(yaw, -1.2, 1.2) : null;
+      headPitchTarget = Number.isFinite(pitch) ? clamp(pitch, -0.7, 0.7) : 0;
     },
     /** Where the head is actually pointed, after easing -- for a camera that
-     *  has to look where it looks. */
+     *  has to look where it looks. The EASED values, not the targets: read the
+     *  target and the view arrives somewhere the head has not got to yet. */
     get looking() { return headLive; },
+    get lookingUp() { return headPitchLive; },
     palm(side, along, across) {
       palmTarget[side === 'left' ? 'left' : 'right'] =
         along && across ? { along, across } : null;
@@ -1359,10 +1370,18 @@ export function createDuelist(scene, {
         // head that loses tracking returns rather than staying wherever the
         // last believable frame left it.
         const wanted = headTarget ?? 0;
-        headLive += (wanted - headLive) * Math.min(1, dt * HEAD_TRACK);
+        const wantedPitch = headTarget === null ? 0 : headPitchTarget;
+        const ease = Math.min(1, dt * HEAD_TRACK);
+        headLive += (wanted - headLive) * ease;
+        headPitchLive += (wantedPitch - headPitchLive) * ease;
         for (const part of headRig) {
           part.bone.quaternion.copy(part.rest);
-          part.bone.rotateOnAxis(part.axis, headLive * part.share);
+          part.bone.rotateOnAxis(part.yawAxis, headLive * part.share);
+          // Negative: rotating about the body's LEFT tips the face down, so
+          // looking up is the other way round. Verified against the head bone's
+          // own forward direction rather than reasoned about -- see the probe
+          // note in the commit that added it.
+          part.bone.rotateOnAxis(part.pitchAxis, -headPitchLive * part.share);
         }
       }
 

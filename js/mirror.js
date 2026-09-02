@@ -23,7 +23,10 @@
 import * as THREE from 'three';
 import { buildEnvironment } from './arena/scene.js';
 import { createDuelist } from './arena/duelist.js';
-import { initTracker, getFrame, disposeTracker, setBodyTracking, bodyTracking } from './spell-room/tracker.js';
+import {
+  initTracker, getFrame, disposeTracker, setBodyTracking, bodyTracking,
+  levelHead, setHeadLevel,
+} from './spell-room/tracker.js';
 
 let trackerOn = true;
 import { fingerCurls, palmBasis, FINGERS } from './spell-room/fingers.js';
@@ -83,6 +86,8 @@ const ORBIT_HEIGHT = 2.4;
 const glCanvas = document.querySelector('[data-mirror-gl]');
 const overlay = document.querySelector('[data-mirror-overlay]');
 const video = document.querySelector('[data-mirror-video]');
+const scan = document.querySelector('[data-mirror-scan]');
+const scanCtx = scan.getContext('2d');
 const startPanel = document.querySelector('[data-mirror-start]');
 const startButton = document.querySelector('[data-mirror-enter]');
 const errorLine = document.querySelector('[data-mirror-error]');
@@ -178,10 +183,11 @@ function updateCamera() {
   // the target and the view would arrive somewhere the head has not got to yet.
   // Drag still works, and adds on top: the head aims, the mouse re-centres.
   if (firstPerson && modelReady) {
+    const pitch = orbitPitch + avatar.lookingUp;
     _forward.set(
-      Math.sin(orbitYaw + avatar.looking) * Math.cos(orbitPitch),
-      Math.sin(orbitPitch),
-      Math.cos(orbitYaw + avatar.looking) * Math.cos(orbitPitch),
+      Math.sin(orbitYaw + avatar.looking) * Math.cos(pitch),
+      Math.sin(pitch),
+      Math.cos(orbitYaw + avatar.looking) * Math.cos(pitch),
     ).normalize();
     avatar.eyeWorld(_eye);
     camera.position.copy(_eye).addScaledVector(_forward, EYE_AHEAD);
@@ -396,7 +402,7 @@ function driveBody(frame) {
   // The head turns with you. Null hands it back and it eases home, which is
   // what should happen when the face leaves shot rather than the head staying
   // craned wherever the last readable frame left it.
-  avatar.look(frame.tracked ? frame.head : null);
+  avatar.look(frame.tracked ? frame.head?.yaw : null, frame.head?.pitch ?? 0);
 
   for (const side of ['left', 'right']) {
     // The same two the arms were driven from, not a second lookup with its own
@@ -509,13 +515,18 @@ function drawReadout(frame) {
     ctx.fillText(`R · RECORDING — ${Math.max(0, left).toFixed(1)}s, ${recording.frames.length} frames`, 260, 124);
     ctx.fillStyle = DIM;
   } else {
-    ctx.fillText('R · record 8s of landmarks to a file', 260, 124);
+    ctx.fillText('R · record 8s of landmarks   C · camera', 260, 124);
   }
-  ctx.fillText(
-    frame.head === null
-      ? 'head — no face in shot'
-      : `head — ${(frame.head * 180 / Math.PI).toFixed(0)}° (+ is your own left)`,
-    24, 142);
+  const deg = r => (r * 180 / Math.PI).toFixed(0);
+  if (!frame.head) {
+    ctx.fillText('head — no face in shot', 24, 142);
+  } else if (!frame.head.levelled) {
+    ctx.fillStyle = RED;
+    ctx.fillText(`head — turn ${deg(frame.head.yaw)}°  ·  L · look level to set pitch`, 24, 142);
+    ctx.fillStyle = DIM;
+  } else {
+    ctx.fillText(`head — turn ${deg(frame.head.yaw)}°  lift ${deg(frame.head.pitch)}°  ·  L · re-level`, 24, 142);
+  }
   if (placement) {
     ctx.fillStyle = /waiting|guessing/.test(placement) ? RED : DIM;
     ctx.fillText(placement, 24, 178);
@@ -609,6 +620,7 @@ function loop() {
 
   renderer.render(scene, camera);
   recordFrame(frame, now);
+  drawScan(frame);
   maybeDrawReadout(frame, now);
 }
 
@@ -670,10 +682,102 @@ function saveRecording() {
   recording = null;
 }
 
+// ─── The camera, shown ────────────────────────────────────────────────────────
+//
+// The video element was a 1x1 transparent pixel: enough to feed the tracker,
+// useless to the person being tracked. Every question this session -- is the
+// hand lost, or mapped wrong? is that my left, or does it think so? -- needed
+// to see what the lens saw, and the only way to get it was a screenshot of the
+// character and a guess about the cause.
+//
+// The landmarks are drawn over it in the lens's own coordinates, so a point
+// that is wrong is wrong where you can see it. Both are mirrored in CSS,
+// because a preview of yourself that is not mirrored is unusable.
+let showCamera = true;
+
+const HAND_LINKS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],
+  [10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+
+function drawScan(frame) {
+  video.hidden = scan.hidden = !showCamera;
+  if (!showCamera || !video.videoWidth) return;
+  const w = video.clientWidth || 260;
+  const h = Math.round(w * video.videoHeight / video.videoWidth);
+  if (scan.width !== w || scan.height !== h) { scan.width = w; scan.height = h; }
+  scan.style.height = `${h}px`;
+  scanCtx.clearRect(0, 0, w, h);
+
+  // The tracker un-mirrors x on the way in; the preview is mirrored back by
+  // CSS. So these go on flipped, which lands them over the real thing.
+  const at = p => [(1 - p.x) * w, p.y * h];
+
+  for (const hand of frame.hands ?? []) {
+    const marks = hand.landmarks;
+    if (!marks) continue;
+    scanCtx.strokeStyle = hand.side === 'left' ? '#8cc9ff' : GOLD;
+    scanCtx.lineWidth = 1.5;
+    scanCtx.beginPath();
+    for (const [a, b] of HAND_LINKS) {
+      if (!marks[a] || !marks[b]) continue;
+      scanCtx.moveTo(...at(marks[a]));
+      scanCtx.lineTo(...at(marks[b]));
+    }
+    scanCtx.stroke();
+    if (hand.anchor) {
+      scanCtx.fillStyle = '#fff';
+      scanCtx.beginPath();
+      scanCtx.arc(...at(hand.anchor), 3.5, 0, Math.PI * 2);
+      scanCtx.fill();
+    }
+  }
+
+  const pose = frame.pose;
+  if (pose) {
+    scanCtx.strokeStyle = '#6f7fa8';
+    scanCtx.lineWidth = 2;
+    for (const side of ['left', 'right']) {
+      const arm = pose[side];
+      if (!arm?.shoulder) continue;
+      scanCtx.beginPath();
+      scanCtx.moveTo(...at(arm.shoulder));
+      if (arm.elbow) scanCtx.lineTo(...at(arm.elbow));
+      if (arm.wrist) scanCtx.lineTo(...at(arm.wrist));
+      scanCtx.stroke();
+      scanCtx.fillStyle = '#9fb2dd';
+      scanCtx.beginPath();
+      scanCtx.arc(...at(arm.shoulder), 3, 0, Math.PI * 2);
+      scanCtx.fill();
+    }
+  }
+
+  if (frame.head) {
+    scanCtx.fillStyle = frame.head.levelled ? GOLD : RED;
+    scanCtx.font = '10px "IBM Plex Mono", monospace';
+    scanCtx.save();
+    scanCtx.scale(-1, 1);        // undo the CSS mirror, or the text reads backwards
+    scanCtx.fillText(`${(frame.head.yaw * 180 / Math.PI).toFixed(0)}°`, -w + 6, 14);
+    scanCtx.restore();
+  }
+}
+
+// Where this face's level lives between sessions, so it is asked for once.
+const LEVEL_KEY = 'veilcore.headLevel';
+try {
+  const stored = Number(localStorage.getItem(LEVEL_KEY));
+  if (Number.isFinite(stored) && stored !== 0) setHeadLevel(stored);
+} catch { /* private window, or storage refused: level again this session */ }
+
 addEventListener('keydown', event => {
   if (event.repeat) return;
   if (event.code === 'KeyV') firstPerson = !firstPerson;
   if (event.code === 'KeyR' && !recording) startRecording();
+  if (event.code === 'KeyC') showCamera = !showCamera;
+  if (event.code === 'KeyL') {
+    const rest = levelHead();
+    if (rest !== null) {
+      try { localStorage.setItem(LEVEL_KEY, String(rest)); } catch { /* not fatal */ }
+    }
+  }
   if (event.code === 'KeyB') setBodyTracking(!bodyTracking());
   // The comparison that was never actually made: what does this scene render at
   // with NO tracking at all? Everything so far has assumed the tracker was what
