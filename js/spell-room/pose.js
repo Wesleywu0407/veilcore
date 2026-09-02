@@ -196,3 +196,22 @@ export function handsCrossed(low, high, pose) {
   if (Math.abs(straight - crossed) < CROSS_MARGIN) return null;
   return crossed < straight;
 }
+
+/**
+ * How wide the shoulders look, right now, in the picture.
+ *
+ * The picture has no scale of its own: the same arm is twice as many pixels
+ * when you lean in. Everything measured off the body has to be divided by
+ * something that scales the same way, and the shoulders are the sturdiest thing
+ * there is -- always both in shot when readPose() returns at all, and they do
+ * not move relative to each other whatever the arms are doing.
+ */
+export function shoulderSpan(pose) {
+  const a = pose?.left?.shoulder;
+  const b = pose?.right?.shoulder;
+  if (!a || !b) return 0;
+  const span = Math.hypot(a.x - b.x, a.y - b.y);
+  // Too small to divide by: the player is far away, side on, or the model has
+  // put both shoulders in the same place. Callers fall back to the box.
+  return span > 0.04 ? span : 0;
+}

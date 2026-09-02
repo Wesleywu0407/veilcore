@@ -27,6 +27,7 @@ import { initTracker, getFrame, disposeTracker, setBodyTracking, bodyTracking } 
 
 let trackerOn = true;
 import { fingerCurls, palmBasis, FINGERS } from './spell-room/fingers.js';
+import { shoulderSpan } from './spell-room/pose.js';
 import { loadGLB } from './arena/asset-library.js';
 
 const GOLD = '#ffd98a';
@@ -201,16 +202,46 @@ const _camBack = new THREE.Vector3();
 const _along = { left: new THREE.Vector3(), right: new THREE.Vector3() };
 const _across = { left: new THREE.Vector3(), right: new THREE.Vector3() };
 
+// An arm, measured in shoulder widths. Roughly 1.5 on a person; it is only ever
+// used to turn a distance in the picture into a fraction of THIS arm, so it can
+// be a constant rather than something else to track.
+const ARM_IN_SPANS = 1.55;
+
 /**
- * Straight through the one camera, at a fixed depth. Raw x -- see unflip().
+ * Where the hand goes: an offset from the player's own shoulder, in arm
+ * lengths, rather than a place in the picture.
  *
  * `at` is the hand's smoothed WRIST, not its fingertip: the IK solves for the
  * wrist bone, and hanging the arm off a fingertip both overreached it by a
  * hand's length and turned every finger curl into a shoulder movement.
+ *
+ * The depth is what is left over. The picture gives two components of a
+ * direction and cannot give the third, so take it as the rest of a unit vector:
+ * a hand near your shoulder in the picture is one reaching TOWARD the lens, and
+ * an arm stretched straight out to the side has no forward in it at all. A
+ * fixed forward push -- what the box did -- is wrong at both ends, and at the
+ * far end it pushed the target past armReach and clamped.
+ *
+ * Falls back to the box when there is no body: still absolute, still drifts,
+ * but an arm that drifts beats an arm that does not move.
  */
-function handTarget(side, at) {
-  return avatar.reachBox(side, 1 - at.x, at.y, _handTarget);
+function handTarget(side, at, pose) {
+  const shoulder = pose?.[side]?.shoulder;
+  const scale = shoulderSpan(pose) * ARM_IN_SPANS;
+  if (!shoulder || !scale) return avatar.reachBox(side, 1 - at.x, at.y, _handTarget);
+
+  // Raw picture offset, shoulder to hand. Both x's un-flip, and the two `1 -`
+  // cancel into the subtraction the other way round.
+  const dx = (shoulder.x - at.x) / scale;
+  const dy = -(at.y - shoulder.y) / scale;
+  const flat = Math.hypot(dx, dy);
+  const dz = flat >= 1 ? 0 : Math.sqrt(1 - flat * flat) * REACH_DEPTH;
+  return avatar.reachOffset(side, dx, dy, dz, _handTarget);
 }
+
+// How much of the leftover length to spend on depth. Not 1: a hand held at
+// shoulder height in front of you is not at full stretch toward the lens.
+const REACH_DEPTH = 0.85;
 
 /** The point an arm follows. Falls back to the tip if a hand predates anchors. */
 const anchorOf = hand => hand.anchor ?? hand.tip;
@@ -316,13 +347,13 @@ function driveBody(frame) {
   // Same side throughout: reach() drives the duelist's RIGHT arm, and the
   // player's RIGHT hand is what feeds it.
   avatar.reach(
-    frame.tracked && right ? handTarget('right', anchorOf(right)) : null,
+    frame.tracked && right ? handTarget('right', anchorOf(right), frame.pose) : null,
     0,
     false,
     frame.pose?.right ? elbowTarget('right', frame.pose.right) : null,
   );
   avatar.reachLeft(
-    frame.tracked && left ? handTarget('left', anchorOf(left)) : null,
+    frame.tracked && left ? handTarget('left', anchorOf(left), frame.pose) : null,
     frame.pose?.left ? elbowTarget('left', frame.pose.left) : null,
   );
 

@@ -56,6 +56,73 @@ const FINGER_MAX_CURL = 0.55;
 // reads as a fast hand.
 const PALM_TRACK = 11;
 
+// ── How much of the wrist's roll the FOREARM takes ──
+//
+// A palm turning from down to up is about 180 degrees of roll, and all of it
+// used to land on the hand bone. Measured on this rig: rolling the palm through
+// a half turn put 152 degrees of twist into that one joint.
+//
+// A real wrist does not do that. Turning your palm over is mostly the radius
+// crossing the ulna -- the FOREARM twisting along its length -- and the wrist
+// itself contributes perhaps 25 degrees at the end. Skinning follows the
+// anatomy it was painted for, so 152 degrees in one joint pinches the mesh into
+// the sleeve and fans it out past the knuckles. That is the "everything below
+// the wrist looks wrong" that no amount of correcting the DIRECTION could fix:
+// the direction was right, and the joint carrying it was the wrong one.
+//
+// 0.65 to the forearm leaves roughly a third at the wrist, which is about where
+// a person is. Spinning a bone about its OWN length does not move the joint at
+// the end of it -- the wrist lies on that axis -- so the hand stays exactly
+// where the IK put it. Same trick the pole hint uses in arm-ik.js.
+const FOREARM_TWIST_SHARE = 0.65;
+const _twAxis = new THREE.Vector3();
+const _twDelta = new THREE.Quaternion();
+const _twSpin = new THREE.Quaternion();
+const _twVec = new THREE.Vector3();
+const _twWorld = new THREE.Quaternion();
+const _twParent = new THREE.Quaternion();
+const _twFore = new THREE.Vector3();
+const _twHand = new THREE.Vector3();
+
+/**
+ * Move part of the hand's roll onto the forearm, without moving the hand.
+ *
+ * `wantWorld` is where the hand is meant to end up. The rotation from where it
+ * is to where it is going is split into a swing and a twist about the forearm's
+ * own axis; only the twist is shared, because only the twist is the part a
+ * forearm can do.
+ */
+function shareTwist(rig, wantWorld) {
+  const fore = rig.fore;
+  if (!fore) return;
+  fore.getWorldPosition(_twFore);
+  rig.bone.getWorldPosition(_twHand);
+  _twAxis.copy(_twHand).sub(_twFore);
+  if (_twAxis.lengthSq() < 1e-8) return;
+  _twAxis.normalize();
+
+  rig.bone.getWorldQuaternion(_twWorld);
+  _twDelta.copy(wantWorld).multiply(_twWorld.invert());
+  // Swing-twist: the part of the delta's axis that lies along the forearm.
+  _twVec.set(_twDelta.x, _twDelta.y, _twDelta.z);
+  const along = _twVec.dot(_twAxis);
+  _twSpin.set(_twAxis.x * along, _twAxis.y * along, _twAxis.z * along, _twDelta.w);
+  if (_twSpin.lengthSq() < 1e-8) return;
+  _twSpin.normalize();
+
+  let angle = 2 * Math.acos(Math.min(1, Math.max(-1, _twSpin.w)));
+  if (angle > Math.PI) angle -= 2 * Math.PI;      // take the short way round
+  const sign = Math.sign(along) || 1;
+  const share = angle * sign * FOREARM_TWIST_SHARE;
+  if (!Number.isFinite(share) || Math.abs(share) < 1e-4) return;
+
+  _twSpin.setFromAxisAngle(_twAxis, share);
+  fore.getWorldQuaternion(_twWorld);
+  fore.parent.getWorldQuaternion(_twParent);
+  fore.quaternion.copy(_twParent.invert().multiply(_twSpin.multiply(_twWorld)));
+  fore.updateMatrixWorld(true);
+}
+
 // ── The box a tracked hand is mapped onto ──
 //
 // Fractions of the rig's own measured arm, centred on the shoulder that has to
@@ -321,6 +388,8 @@ function collectPalmRig(model) {
     const boneWorld = bone.getWorldQuaternion(new THREE.Quaternion());
     rig[side.toLowerCase()] = {
       bone,
+      // The forearm shares the roll -- see the twist block in update().
+      fore: model.getObjectByName(`${side}ForeArm`) ?? null,
       // bone -> palm frame, constant for the life of the rig
       offset: boneWorld.clone().invert().multiply(frame),
       rest: bone.quaternion.clone(),
@@ -716,6 +785,31 @@ export function createDuelist(scene, {
         shoulder.x + (u - 0.5) * 2 * REACH_BOX.across * armReach,
         shoulder.y + (0.5 - v) * 2 * REACH_BOX.rise * armReach,
         shoulder.z + REACH_BOX.forward * armReach,
+      );
+      return root.localToWorld(out);
+    },
+    /**
+     * Hold the hand at an offset from THIS body's shoulder, in arm lengths.
+     *
+     * reachBox() maps an absolute place in the picture, and that is what made
+     * the arm drift: the box is pinned to the character's shoulder, the player
+     * is not pinned to anything, and every lean, breath or shuffle toward the
+     * webcam moved their hand across the frame without them moving their arm at
+     * all. The character copied the frame, faithfully, and looked like it was
+     * sliding around on its own.
+     *
+     * An offset from the player's own shoulder has none of that in it. Sit
+     * closer, lean, stand off to one side: the arm only moves when the arm
+     * moves. It is also the only version that is honestly 1:1 -- a box maps the
+     * picture onto the body, this maps the body onto the body.
+     */
+    reachOffset(side, dx, dy, dz, out) {
+      const shoulder = side === 'left' ? leftShoulderLocal : shoulderLocal;
+      if (!shoulder || !(armReach > 0)) return null;
+      out.set(
+        shoulder.x + dx * armReach,
+        shoulder.y + dy * armReach,
+        shoulder.z + dz * armReach,
       );
       return root.localToWorld(out);
     },
@@ -1237,8 +1331,12 @@ export function createDuelist(scene, {
           _pAcross.copy(_pAlong).cross(_pNormal).normalize();
           _palmM.makeBasis(_pAcross, _pAlong, _pNormal);
           _palmQ.setFromRotationMatrix(_palmM);
-          // Wanted palm frame -> wanted bone world rotation -> local.
+          // Wanted palm frame -> wanted bone WORLD rotation. Held in world for
+          // a moment, because the forearm is about to move underneath it and a
+          // local rotation would mean something different afterwards.
           _palmWant.copy(_palmQ).multiply(rig.offset.clone().invert());
+          shareTwist(rig, _palmWant);
+          // ...and only now to local, against the forearm as it now stands.
           rig.bone.parent.getWorldQuaternion(_palmParent);
           _palmWant.premultiply(_palmParent.invert());
           // First frame of a hold snaps, so the wrist does not swing in from
