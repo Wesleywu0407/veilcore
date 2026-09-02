@@ -120,3 +120,29 @@ export function sideOfWrist(wrist, pose) {
   if (!(Math.abs(toLeft - toRight) > 1e-3)) return null;
   return toLeft < toRight ? 'left' : 'right';
 }
+
+/**
+ * Holds a lone hand's side steady while the body decides.
+ *
+ * sideOfWrist() answers only when there is a body in that frame, and the body
+ * model does not run on every frame -- it is sampled, and it drops a joint the
+ * moment an arm crosses the torso. Read raw, that makes the side of a single
+ * raised hand flicker: null, 'left', null, 'left'. A consumer that guesses on
+ * the nulls swaps arms mid-gesture, and one that does not, stutters.
+ *
+ * So: the first real answer sticks, and nothing but a fresh answer replaces it.
+ * `forget()` on a dropout, so putting one hand down and raising the other does
+ * not inherit the first one's side.
+ */
+export function createSideLatch() {
+  let side = null;
+  return {
+    get side() { return side; },
+    /** Take one frame's answer -- `null` meaning "the body did not say". */
+    settle(asked) {
+      if (asked === 'left' || asked === 'right') side = asked;
+      return side;
+    },
+    forget() { side = null; },
+  };
+}

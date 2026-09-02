@@ -17,7 +17,7 @@
 //      than a room with no webcam.
 
 import { LM, dist } from "./vec.js";
-import { readPose, sideOfWrist } from "./pose.js";
+import { readPose, sideOfWrist, createSideLatch } from "./pose.js";
 import { makeOneEuro } from "./one-euro.js";
 
 export { LM, dist };
@@ -76,6 +76,9 @@ let busy = false;
 // a 120ms body frame would hold the hands' turn too, so the signal the game is
 // actually played with was being paced by the optional one.
 let bodyBusy = false;
+
+// The side of a single raised hand, held between body samples. See pose.js.
+const loneSide = createSideLatch();
 
 // ─── Smoothing ────────────────────────────────────────────────────────────────
 //
@@ -387,10 +390,12 @@ function applyResult(result) {
   if (sides.length === 2) {
     sides[0].side = 'left';
     sides[1].side = 'right';
+    loneSide.forget();
   } else if (sides.length === 1) {
-    // One hand cannot be placed by x -- but the body can place it, and null
-    // still means "no body to ask", which consumers already handle.
-    sides[0].side = sideOfWrist(sides[0].wrist, frame.pose);
+    // One hand cannot be placed by x -- but the body can place it. The latch
+    // keeps that answer while the body model is between samples, so the side
+    // does not flicker back to null every frame the pose is missing.
+    sides[0].side = loneSide.settle(sideOfWrist(sides[0].wrist, frame.pose));
   }
   anchorHands(sides, performance.now());
   frame.hands = sides.length ? sides : EMPTY_HANDS;
@@ -405,6 +410,10 @@ function applyResult(result) {
       frame.tracked = false;
       frame.stale = false;
       frame.hands = EMPTY_HANDS;
+      // The next hand up is a new question. Without this, putting the right
+      // hand down and raising the left moves the right arm until the body
+      // catches up.
+      loneSide.forget();
       // The body is only read while an arm is up, so let it go with the hand.
       // Holding it would leave the elbow bent the way it was when the hand left.
       frame.pose = null;

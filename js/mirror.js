@@ -268,13 +268,26 @@ function trackedDirection(v, out) {
 
 function driveBody(frame) {
   const hands = frame.hands ?? [];
-  // A lone hand now arrives with its real side on it -- the body model places
-  // it, see sideOfWrist(). The null case is what is left when there is no body
-  // to ask, and there it still has to guess; the right hand is the guess the
-  // duel makes too. Before this, raising your left arm always moved the
-  // character's right one, because null was the ONLY answer a lone hand got.
-  const right = hands.find(h => h.side === 'right')
-    ?? (hands.length === 1 && hands[0].side === null ? hands[0] : null);
+  // A lone hand arrives with its real side on it: the body model places it, and
+  // a latch holds that answer between body samples. See sideOfWrist().
+  //
+  // Guess ONLY when there is no body model to ask at all. It used to guess on
+  // every null, which is why raising your left arm moved the character's right
+  // -- null was the only answer a lone hand ever got. With a body loaded the
+  // side lands within a sample or two, and holding both arms still for those
+  // two frames is far better than moving the wrong one and snapping across.
+  const mayGuess = !bodyTracking();
+  const unplaced = hands.length === 1 && hands[0].side === null;
+  if (unplaced && !mayGuess) {
+    // The body has not named this hand yet. Do nothing at all -- not even pass
+    // null to reach(), which RELEASES an arm rather than holding it, dropping
+    // it to rest for the ~150ms the body model takes to answer and then hauling
+    // it back up. Returning leaves every target exactly where it was, which is
+    // what "not yet" ought to look like.
+    return;
+  }
+  const lone = unplaced ? hands[0] : null;
+  const right = hands.find(h => h.side === 'right') ?? lone;
   const left = hands.find(h => h.side === 'left') ?? null;
 
   // Both arms, because a mirror with one live arm and one hanging is not a
@@ -294,8 +307,10 @@ function driveBody(frame) {
   );
 
   for (const side of ['left', 'right']) {
-    const hand = hands.find(h => h.side === side)
-      ?? (hands.length === 1 && hands[0].side === null && side === 'right' ? hands[0] : null);
+    // The same two the arms were driven from, not a second lookup with its own
+    // copy of the rules: fingers on one hand and the arm on the other is a bug
+    // this file has room for exactly once.
+    const hand = side === 'right' ? right : left;
     if (!hand) {
       avatar.fingers(side, null);
       avatar.palm(side, null, null);

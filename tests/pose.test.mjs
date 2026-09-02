@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { POSE, readPose, elbowHint, sideOfWrist } from '../js/spell-room/pose.js';
+import { POSE, readPose, elbowHint, sideOfWrist, createSideLatch } from '../js/spell-room/pose.js';
 
 /**
  * A body standing square to the camera, already un-mirrored: the player's right
@@ -103,4 +103,36 @@ test('no body means no guess, which is what null has always meant', () => {
 
 test('a dead heat is not an answer either', () => {
   assert.equal(sideOfWrist(at(0.5, 0.5), bodyWrists(0.3, 0.7)), null);
+});
+
+// ── Holding a side steady ─────────────────────────────────────────────────────
+
+test('the latch has no opinion until the body gives it one', () => {
+  const latch = createSideLatch();
+  assert.equal(latch.side, null);
+  assert.equal(latch.settle(null), null, 'a frame with no body is not an answer');
+});
+
+test('the first real answer sticks through the frames that have none', () => {
+  const latch = createSideLatch();
+  latch.settle('left');
+  // The body model is sampled, so most frames say nothing at all.
+  for (let i = 0; i < 20; i++) assert.equal(latch.settle(null), 'left');
+});
+
+test('a new answer replaces the held one', () => {
+  const latch = createSideLatch();
+  latch.settle('left');
+  assert.equal(latch.settle('right'), 'right');
+});
+
+test('forgetting means the next hand up is asked afresh', () => {
+  // Right hand down, left hand up: without this the left arm reads as right
+  // until the body model catches up.
+  const latch = createSideLatch();
+  latch.settle('right');
+  latch.forget();
+  assert.equal(latch.side, null);
+  assert.equal(latch.settle(null), null);
+  assert.equal(latch.settle('left'), 'left');
 });
