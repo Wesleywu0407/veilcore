@@ -458,6 +458,14 @@ export function createDuelist(scene, {
   // Per hand: the wrist bone, and the fixed rotation between that bone and the
   // anatomical frame of the palm hanging off it.
   let palmRig = null;
+  // The rest rotation of every bone the IK writes to.
+  //
+  // A clip normally rewrites these on every frame, so when the IK lets go the
+  // animation is already putting the arm back. With no clip loaded nothing
+  // does, and the arm simply stays wherever the last solve left it -- hanging
+  // in the air long after the hand that put it there has gone. Holding the rest
+  // pose here lets the same code stand in for the clip.
+  let restPose = null;
   const palmTarget = { left: null, right: null };
   const _palmM = new THREE.Matrix4();
   const _palmQ = new THREE.Quaternion();
@@ -857,6 +865,13 @@ export function createDuelist(scene, {
         root.updateMatrixWorld(true);
         eyeLocal = root.worldToLocal(headBone.getWorldPosition(new THREE.Vector3()));
       }
+      restPose = [];
+      for (const bone of ['RightArm', 'RightForeArm', 'RightHand',
+                          'LeftArm', 'LeftForeArm', 'LeftHand']) {
+        const found = imported.getObjectByName(bone);
+        if (found) restPose.push({ bone: found, rest: found.quaternion.clone() });
+      }
+
       armIK = createArmIK(imported, {
         shoulder: 'RightArm', elbow: 'RightForeArm', wrist: 'RightHand',
         pole: new THREE.Vector3(-0.35, -1, -0.45).normalize(),
@@ -1036,6 +1051,17 @@ export function createDuelist(scene, {
           // stale pose. Same reason the draw does it.
           root.updateMatrixWorld(true);
         }
+      }
+
+      // Without a clip, put the arms back to rest before anything solves.
+      //
+      // This is what the mixer does in the duel, and the solves below are all
+      // written expecting it: each one applies ON TOP of whatever pose the frame
+      // started from, weighted, so a frame that starts from the previous frame's
+      // solve accumulates instead of tracking. It is also what makes letting go
+      // work at all -- with the weight at zero, rest is where the arm lands.
+      if (!mixer && restPose) {
+        for (const { bone, rest } of restPose) bone.quaternion.copy(rest);
       }
 
       // Fingers, after the mixer like everything else. No clip animates these
