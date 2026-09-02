@@ -78,6 +78,12 @@ game grabs the DOM by those. The in-game HUD is drawn on canvas in
 `js/arena.js`, so CSS cannot reach it — do not try to restyle the HUD in
 `index.html`.
 
+**The hands and the body run in SEPARATE workers, and that is measured.** One
+detection costs a median 12ms for the hands alone and 38ms with the body, with
+spikes past 120ms. Sharing a thread meant every frame the body ran on, the hands
+queued behind it -- the signal the game is played with paced by the optional
+one. Do not merge them back to save a file.
+
 **Tracking runs in a worker, and it is a CLASSIC one.** `tracker-worker.js`
 owns MediaPipe; `tracker.js` owns the camera and everything downstream. Do not
 "modernise" it to `{ type: "module" }` -- MediaPipe loads its WASM glue with

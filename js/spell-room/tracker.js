@@ -48,7 +48,8 @@ let trackBody = true;
 const POSE_EVERY = 3;
 
 let video = null;
-let worker = null;
+let handWorker = null;
+let bodyWorker = null;
 let bodyLoaded = false;
 let running = false;
 let lastVideoTime = -1;
@@ -61,6 +62,10 @@ let detections = 0;
 // a frame counter but can absolutely feel. Dropping frames while busy keeps the
 // newest one always the one being worked on.
 let busy = false;
+// The body gets its own gate. Sharing one with the hands is what coupled them:
+// a 120ms body frame would hold the hands' turn too, so the signal the game is
+// actually played with was being paced by the optional one.
+let bodyBusy = false;
 
 // ─── Smoothing ────────────────────────────────────────────────────────────────
 //
@@ -157,6 +162,34 @@ function withTimeout(promise, ms, label) {
   ]);
 }
 
+/** One worker, one model. See tracker-worker.js for why they are not shared. */
+function spawnWorker(models) {
+  // Classic, not a module worker -- see the top of tracker-worker.js. MediaPipe
+  // needs importScripts, and a module worker is forbidden from having it.
+  const spawned = new Worker(new URL("./tracker-worker.js", import.meta.url));
+  spawned.postMessage({ type: "init", wasmRoot: WASM_ROOT, ...models });
+  return spawned;
+}
+
+/**
+ * Bring up the body model beside the hands, without anyone waiting for it.
+ *
+ * It is three times the cost of the hands and spikes past 120ms, so it gets its
+ * own thread and its own gate; the hands never queue behind it. If it does not
+ * load, the arms fall back to a fixed elbow hint, which is what they used
+ * before the body existed.
+ */
+function startBody(onStage) {
+  const spawned = spawnWorker({ poseModel: POSE_MODEL_URL });
+  spawned.onmessage = ({ data }) => {
+    if (data.type === "stage") onStage(data.stage);
+    else if (data.type === "ready") { bodyWorker = spawned; bodyLoaded = true; }
+    else if (data.type === "result") { bodyBusy = false; applyPose(data.pose ?? null); }
+    else if (data.type === "failed") { bodyLoaded = false; bodyWorker = null; }
+  };
+  spawned.onerror = () => { bodyLoaded = false; bodyWorker = null; };
+}
+
 /**
  * Ask for the camera and load the model. Must be called from a user gesture
  * (a click or keypress) — browsers refuse getUserMedia otherwise, and the
@@ -191,37 +224,31 @@ export async function initTracker(videoEl, onStage = () => {}) {
   // the short version is that inference and rendering were sharing one thread,
   // so a near-empty scene rendered at 39-55 fps and the tracker stalled to 0 Hz.
   onStage("starting the tracker");
-  // Classic, not a module worker -- see the top of tracker-worker.js. MediaPipe
-  // needs importScripts, and a module worker is forbidden from having it.
-  worker = new Worker(new URL("./tracker-worker.js", import.meta.url));
+  handWorker = spawnWorker({ handModel: MODEL_URL });
 
   const started = new Promise((resolve, reject) => {
-    worker.onmessage = ({ data }) => {
+    handWorker.onmessage = ({ data }) => {
       if (data.type === "stage") onStage(data.stage);
-      else if (data.type === "ready") { bodyLoaded = data.body; resolve(); }
+      else if (data.type === "ready") resolve();
       else if (data.type === "failed") reject(new Error(data.message));
     };
     // A worker that cannot even parse must not leave startup hanging.
-    worker.onerror = event => reject(new Error(event.message || "worker failed to start"));
-  });
-
-  worker.postMessage({
-    type: "init",
-    wasmRoot: WASM_ROOT,
-    handModel: MODEL_URL,
-    poseModel: POSE_MODEL_URL,
+    handWorker.onerror = event => reject(new Error(event.message || "worker failed to start"));
   });
   await withTimeout(started, 45000, "tracker worker");
 
-  // Swap the startup handler for the running one now that it is up.
-  worker.onmessage = ({ data }) => {
+  handWorker.onmessage = ({ data }) => {
     if (data.type !== "result") return;
     busy = false;
     applyResult(data);
-    if (data.pose !== undefined) applyPose(data.pose);
     detections++;
     frame.detections = detections;
   };
+
+  // The body loads in a thread of its own and does NOT hold up startup. Losing
+  // it costs the elbow hint and nothing else, so the duel should be playable
+  // the moment the hands are ready.
+  startBody(onStage);
 
   onStage("ready");
   running = true;
@@ -246,7 +273,7 @@ function detectLoop() {
     lastVideoTime = video.currentTime;
     busy = true;
     const timestamp = performance.now();
-    const wantBody = trackBody && bodyLoaded && frame.tracked
+    const wantBody = trackBody && bodyLoaded && !bodyBusy && frame.tracked
       && detections % POSE_EVERY === 0;
 
     // createImageBitmap is the one piece of per-frame work still on this
@@ -255,7 +282,19 @@ function detectLoop() {
     // with no copy.
     createImageBitmap(video).then(bitmap => {
       if (!running) { bitmap.close(); return; }
-      worker.postMessage({ type: "frame", bitmap, timestamp, wantBody }, [bitmap]);
+      handWorker.postMessage({ type: "frame", bitmap, timestamp }, [bitmap]);
+      // The body gets its own copy on its own cadence. A transferred bitmap
+      // belongs to whoever received it, so this is a second decode rather than
+      // a second send -- cheap next to the inference it feeds.
+      if (wantBody) {
+        bodyBusy = true;
+        createImageBitmap(video)
+          .then(copy => {
+            if (!running || !bodyWorker) { copy.close(); return; }
+            bodyWorker.postMessage({ type: "frame", bitmap: copy, timestamp }, [copy]);
+          })
+          .catch(() => { bodyBusy = false; });
+      }
     }).catch(() => {
       // A frame the browser would not decode is not worth stopping for, but
       // the gate has to be released or nothing is ever sent again.
@@ -347,7 +386,7 @@ export function getFrame() {
 }
 
 export function isReady() {
-  return running && worker !== null;
+  return running && handWorker !== null;
 }
 
 /** Whether the body model loaded. False means the arms are on the fixed hint. */
@@ -376,9 +415,12 @@ export function bodyTracking() {
 export function disposeTracker() {
   running = false;
   busy = false;
-  worker?.postMessage({ type: "close" });
-  worker?.terminate();
-  worker = null;
+  for (const w of [handWorker, bodyWorker]) {
+    w?.postMessage({ type: "close" });
+    w?.terminate();
+  }
+  handWorker = bodyWorker = null;
+  bodyBusy = false;
   bodyLoaded = false;
   frame.pose = null;
   const stream = video?.srcObject;

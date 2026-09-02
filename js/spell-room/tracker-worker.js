@@ -17,6 +17,17 @@
 // Nothing here is allowed to throw across the boundary: a failed frame posts an
 // error and the main thread keeps its previous pose, exactly as it did when a
 // dropped detection was swallowed in place.
+//
+// ── One model per instance ──
+//
+// tracker.js runs TWO of these, one holding the hand model and one the body.
+// They were briefly in a single worker answering a single message, and the
+// measurement said no: hands alone infer in a median 12ms, hands and body
+// together in 38ms with spikes past 120ms. Sharing a thread meant every frame
+// the body ran on, the hands waited behind it -- so the fast, load-bearing
+// signal was being paced by the slow, optional one. Apart, the hands keep their
+// own 12ms cadence and the body arrives whenever it can, which is all a bend
+// hint that gets eased anyway ever needed.
 
 // ── Why this is a CLASSIC worker that imports dynamically ──
 //
@@ -53,40 +64,40 @@ function stage(text) {
 }
 
 async function init({ wasmRoot, handModel, poseModel }) {
-  stage("loading the model (7.8 MB)");
   const { FilesetResolver, HandLandmarker, PoseLandmarker } =
     await withTimeout(import(BUNDLE), 30000, "MediaPipe bundle");
   const vision = await withTimeout(
     FilesetResolver.forVisionTasks(wasmRoot), 30000, "WASM download",
   );
 
-  // GPU is faster but its init hangs on some Mac/Chrome combinations, and it
-  // hangs rather than throwing. Try it with a short leash, then fall back.
-  try {
-    hand = await withTimeout(
-      HandLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: handModel, delegate: "GPU" },
-        runningMode: "VIDEO",
-        numHands: 2,
-      }),
-      15000, "GPU model load",
-    );
-  } catch (error) {
-    stage("GPU refused — retrying on CPU");
-    hand = await withTimeout(
-      HandLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: handModel, delegate: "CPU" },
-        runningMode: "VIDEO",
-        numHands: 2,
-      }),
-      30000, "CPU model load",
-    );
+  if (handModel) {
+    stage("loading the model (7.8 MB)");
+    // GPU is faster but its init hangs on some Mac/Chrome combinations, and it
+    // hangs rather than throwing. Try it with a short leash, then fall back.
+    try {
+      hand = await withTimeout(
+        HandLandmarker.createFromOptions(vision, {
+          baseOptions: { modelAssetPath: handModel, delegate: "GPU" },
+          runningMode: "VIDEO",
+          numHands: 2,
+        }),
+        15000, "GPU model load",
+      );
+    } catch {
+      stage("GPU refused — retrying on CPU");
+      hand = await withTimeout(
+        HandLandmarker.createFromOptions(vision, {
+          baseOptions: { modelAssetPath: handModel, delegate: "CPU" },
+          runningMode: "VIDEO",
+          numHands: 2,
+        }),
+        30000, "CPU model load",
+      );
+    }
   }
 
-  // The body is a bonus, not a requirement. Losing it costs the elbow hint and
-  // nothing else, so it must never take the hands down with it.
-  stage("loading the body model (5.5 MB)");
-  try {
+  if (poseModel) {
+    stage("loading the body model (5.5 MB)");
     pose = await withTimeout(
       PoseLandmarker.createFromOptions(vision, {
         baseOptions: { modelAssetPath: poseModel, delegate: "GPU" },
@@ -95,8 +106,6 @@ async function init({ wasmRoot, handModel, poseModel }) {
       }),
       15000, "GPU pose model load",
     );
-  } catch {
-    pose = null;
   }
 
   self.postMessage({ type: "ready", body: pose !== null });
@@ -109,18 +118,21 @@ async function init({ wasmRoot, handModel, poseModel }) {
  * decoded pixels, and the main thread cannot free it once it has been sent --
  * leaking one per frame at 30Hz is how a tab ends up eating a gigabyte.
  */
-function detect({ bitmap, timestamp, wantBody }) {
+function detect({ bitmap, timestamp }) {
   const result = { type: "result", timestamp };
-  try {
-    const hands = hand.detectForVideo(bitmap, timestamp);
-    result.landmarks = hands.landmarks ?? [];
-    result.handedness = (hands.handedness ?? []).map(h => h[0]?.categoryName ?? null);
-  } catch (error) {
-    result.error = error.message;
-    result.landmarks = [];
+
+  if (hand) {
+    try {
+      const hands = hand.detectForVideo(bitmap, timestamp);
+      result.landmarks = hands.landmarks ?? [];
+      result.handedness = (hands.handedness ?? []).map(h => h[0]?.categoryName ?? null);
+    } catch (error) {
+      result.error = error.message;
+      result.landmarks = [];
+    }
   }
 
-  if (wantBody && pose) {
+  if (pose) {
     try {
       const body = pose.detectForVideo(bitmap, timestamp);
       result.pose = body.landmarks?.[0] ?? null;
