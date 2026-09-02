@@ -67,7 +67,25 @@ const PALM_TRACK = 11;
 // poses are held at. Bigger and the far corners of the picture are simply
 // unreachable -- the IK clamps, the hand stops moving before the player's does,
 // and only the middle of the frame still maps to anything.
-const REACH_BOX = { across: 0.62, rise: 0.62, forward: 0.30 };
+// Forward was 0.30, which held the hands almost against the chest. That is fine
+// for a third-person duel and useless from inside the head: the eye sits
+// EYE_AHEAD (0.30) further forward again, so of the 0.32 the hands stood out
+// from the shoulder only about 0.02 was in FRONT of the lens. A palm level with
+// your ear fills the frame and nothing else is in it, and no amount of moving
+// the camera fixes that -- the hands were never in front of it.
+//
+// 0.72 is an arm held out rather than tucked in, and it leaves a real 0.47 of
+// clearance ahead of the eye. Widening it costs a little at the extreme corners
+// of the picture: sqrt(0.72^2 + 0.58^2 + 0.58^2) = 1.09 armReach, so the last
+// few percent of the frame clamps to a straight arm. That is a far cheaper miss
+// than the 1.70-2.07 the box used to be, where most of the picture mapped
+// somewhere unreachable, and it buys the hands being visible at all.
+const REACH_BOX = { across: 0.58, rise: 0.58, forward: 0.72 };
+
+// How far behind the arm's line the elbow is nudged, when the picture has said
+// which way it leans but cannot say how deep. Same intent as the fixed pole's
+// z, scaled against a unit direction rather than against armReach.
+const ELBOW_BIAS_BACK = 0.35;
 
 // ── The draw ─────────────────────────────────────────────────────────────────
 //
@@ -699,6 +717,34 @@ export function createDuelist(scene, {
         shoulder.y + (0.5 - v) * 2 * REACH_BOX.rise * armReach,
         shoulder.z + REACH_BOX.forward * armReach,
       );
+      return root.localToWorld(out);
+    },
+    /**
+     * A world point for reach()'s bend hint, built from the shoulder-to-elbow
+     * offset as the PICTURE sees it.
+     *
+     * Deliberately not reachBox(). That maps an ABSOLUTE position into a box
+     * centred on this shoulder, and it adds a fixed forward push that belongs
+     * to where a hand goes, not to which way an elbow leans. Sent through it a
+     * hint came out about 95% "straight ahead" -- the elbow parked in front of
+     * the wrist, the bend plane went degenerate, and the arm folded backwards
+     * whatever the player did. Measured: a "wave" put the elbow inboard of the
+     * shoulder and above the wrist.
+     *
+     * `dx`/`dy` are that offset in RAW picture coordinates: x across the lens,
+     * y DOWN. Only their direction is used. Depth is not in the picture, so a
+     * small backward bias stands in for it -- an elbow belongs behind the line
+     * of the arm, which is what the fixed pole says too.
+     */
+    elbowHint(side, dx, dy, out) {
+      const shoulder = side === 'left' ? leftShoulderLocal : shoulderLocal;
+      if (!shoulder || !(armReach > 0)) return null;
+      const len = Math.hypot(dx, dy);
+      if (!(len > 1e-4)) return null;
+      out.set(dx / len, -dy / len, -ELBOW_BIAS_BACK)
+        .normalize()
+        .multiplyScalar(armReach * 0.5)
+        .add(shoulder);
       return root.localToWorld(out);
     },
     /**

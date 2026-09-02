@@ -61,6 +61,21 @@ const DUELIST_CLIPS = [];
 // length, so most of the picture mapped somewhere the hand could not go and
 // only the middle of the frame still moved anything.
 const EYE_AHEAD = 0.30;    // clears the porcelain helm, same as the duel
+
+// ── A lens wide enough to hold both hands ──
+//
+// The orbit's 52 degrees is a portrait lens, and in first person it framed a
+// single palm and nothing else. Hands live at most REACH_BOX.across (0.62 of an
+// arm) out from each shoulder and REACH_BOX.forward ahead, so the half-angle to
+// the far one is atan(across / forward). At 52 degrees vertical that angle is
+// outside the frustum however close the eye sits -- there is no distance at
+// which both hands are in shot, which is why moving the eye never helped.
+//
+// 75 is the ordinary first-person figure, and it is chosen against the box, not
+// by eye: it opens the horizontal half-angle past 50 degrees, and the reach box
+// was widened to 0.50 forward at the same time to bring the far hand inside it.
+const ORBIT_FOV = 52;
+const FIRST_PERSON_FOV = 75;
 const ORBIT_DISTANCE = 3.6;
 const ORBIT_HEIGHT = 2.4;
 
@@ -109,7 +124,7 @@ const grid = new THREE.PolarGridHelper(9, 8, 6, 64, 0x2b3550, 0x1f2740);
 grid.position.y = 0.01;
 scene.add(grid);
 
-const camera = new THREE.PerspectiveCamera(52, 1, 0.05, 200);
+const camera = new THREE.PerspectiveCamera(ORBIT_FOV, 1, 0.05, 200);
 
 const avatar = createDuelist(scene, { colour: 0xffd98a, name: 'Mirror', castShadow: false });
 avatar.setPosition(new THREE.Vector3(0, 0, 0));
@@ -149,6 +164,9 @@ function updateCamera() {
     Math.sin(orbitPitch),
     Math.cos(orbitYaw) * Math.cos(orbitPitch),
   ).normalize();
+
+  const fov = firstPerson ? FIRST_PERSON_FOV : ORBIT_FOV;
+  if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
 
   if (firstPerson && modelReady) {
     avatar.eyeWorld(_eye);
@@ -289,11 +307,25 @@ function driveBody(frame) {
 }
 
 const _elbow = new THREE.Vector3();
+/**
+ * Where the elbow wants to be, as a point the solver reads a DIRECTION from.
+ *
+ * Not the elbow's own place in the picture, and not through reachBox() -- see
+ * elbowHint() for why both of those put the elbow in front of the wrist. What
+ * goes across is the OFFSET from the tracked shoulder, which is the one thing
+ * the body model is genuinely good at: it drops depth constantly, but which way
+ * an elbow leans is exactly what it can see.
+ */
 function elbowTarget(side, arm) {
-  if (!arm?.elbow) return null;
-  // The same box as the hand, and the same raw x, or the bend hint describes a
-  // point in a different space from the wrist it is meant to bend toward.
-  return avatar.reachBox(side, 1 - arm.elbow.x, arm.elbow.y, _elbow);
+  if (!arm?.elbow || !arm?.shoulder) return null;
+  // The offset from the tracked shoulder, in raw picture coordinates: both x's
+  // un-flip, and the two `1 -` cancel into a subtraction the other way round.
+  return avatar.elbowHint(
+    side,
+    arm.shoulder.x - arm.elbow.x,
+    arm.elbow.y - arm.shoulder.y,
+    _elbow,
+  );
 }
 
 // ─── Readout ──────────────────────────────────────────────────────────────────
