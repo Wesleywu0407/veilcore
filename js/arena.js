@@ -13,7 +13,8 @@ import { createSpellSystem } from './arena/spell-system.js';
 import { createPerformanceGovernor } from './arena/performance.js';
 import { createMatch, updateMatch, damage, spendMana, disruptCore } from './arena/match.js';
 import { createHalo } from './spells/halo.js';
-import { initTracker, getFrame, isReady, disposeTracker } from './spell-room/tracker.js';
+import { initTracker, getFrame, isReady, disposeTracker,
+  levelHead, setHeadLevel } from './spell-room/tracker.js';
 import { isPinching, updateCast, currentStroke, resetMagic, RUNES, pinchDebug, TUNE } from './spell-room/magic.js';
 import { createBowState } from './spell-room/archery.js';
 import { createBoxingState } from './spell-room/boxing.js';
@@ -758,7 +759,26 @@ const _look = new THREE.Vector3();
 const _cameraPosition = new THREE.Vector3();
 const _opponentFacing = new THREE.Vector3();
 
+// ── The head's level, shared with the mirror ──
+//
+// The same key, the same storage. Pitch self-calibrates from a second of
+// holding still and roughly forward, so the duel works without ever touching
+// this -- but if that second happened to catch a tilted head there was no way
+// to say so, and levelling in the mirror only to find the duel still wrong is
+// the kind of thing that reads as the feature being broken.
+const LEVEL_KEY = 'veilcore.headLevel.v2';
+try {
+  const stored = Number(localStorage.getItem(LEVEL_KEY));
+  if (Number.isFinite(stored) && stored !== 0) setHeadLevel(stored);
+} catch { /* private window, or storage refused: level again this session */ }
+
 addEventListener('keydown', event => {
+  if (event.code === 'KeyL' && !event.repeat) {
+    const rest = levelHead();
+    if (rest !== null) {
+      try { localStorage.setItem(LEVEL_KEY, String(rest)); } catch { /* not fatal */ }
+    }
+  }
   if (event.code === 'Escape') {
     // Reaches here only when no pointer lock is held; with one, the browser
     // eats this keydown and pointerlockchange opens the menu instead.
@@ -1382,9 +1402,17 @@ function updateHand(now) {
   // posture measured against the shoulder line rather than a count of fingers.
   const mode = inputMode.update(frame.hands, frame.pose);
 
-  // Before the branches, because every one of them returns: fingers belong to
-  // the player in all three modes. See driveFingers().
+  // Before the branches, because every one of them returns: fingers and the
+  // head belong to the player in all three modes. See driveFingers().
   driveFingers(frame);
+
+  // The head turns with yours, in the duel as in the mirror. It reads the FACE,
+  // so it owes nothing to which weapon is up -- and a body that copies your
+  // arms while staring straight ahead is the uncanny half of the effect.
+  playerAvatar.look(
+    frame.tracked ? frame.head?.yaw : null,
+    frame.head?.pitch ?? 0,
+  );
 
   if (mode.mode === 'fist') {
     if (mode.changed) {
@@ -2272,7 +2300,7 @@ function drawHud(now, botState) {
     ? `WASD · FISTS UP · ${punchInRange ? 'IN RANGE — PUNCH' : 'CLOSE IN TO PUNCH'}`
     : bowMode
       ? `WASD · BOW ${bowStringSide.toUpperCase()} STRING · RELEASE TO SHOOT${cooldown}`
-      : `WASD · 1/2/3 ${selected} · TAB ${targetMode} · J/K cast · V ${forcedEye ? 'EYE' : 'chase'}${cooldown}`,
+      : `WASD · 1/2/3 ${selected} · TAB ${targetMode} · J/K cast · L level · V ${forcedEye ? 'EYE' : 'chase'}${cooldown}`,
   24, height - 24);
 
   // What the off hand is asking for. The whole reason the mode is a held-up

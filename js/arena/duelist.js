@@ -82,6 +82,9 @@ const _twVec = new THREE.Vector3();
 const _twWorld = new THREE.Quaternion();
 const _twParent = new THREE.Quaternion();
 const _girdleTarget = new THREE.Vector3();
+const _headWant = new THREE.Quaternion();
+const _headSpin = new THREE.Quaternion();
+const _headSpin2 = new THREE.Quaternion();
 const _girdleWant = new THREE.Quaternion();
 const _girdleSpin = new THREE.Quaternion();
 const _twFore = new THREE.Vector3();
@@ -395,6 +398,10 @@ function collectHeadRig(model) {
       // lowercase beside a `Head` in capitals, which is fair warning.
       yawAxis: up.clone().applyQuaternion(inverse).normalize(),
       pitchAxis: left.clone().applyQuaternion(inverse).normalize(),
+      // Our own rotation, carried across frames -- the same handover the girdle
+      // and the palm rig use. See the note in update().
+      pose: new THREE.Quaternion(),
+      holding: false,
     });
   }
   return bones.length ? bones : null;
@@ -1527,12 +1534,6 @@ export function createDuelist(scene, {
       // eases home first, and only lets go once it has arrived.
       const headActive = headTarget !== null
         || Math.abs(headLive) > 1e-4 || Math.abs(headPitchLive) > 1e-4;
-      // NOTE: this writes `rest` on its first active frame, the way the girdle
-      // used to. It cannot pop today because nothing in the duel calls look()
-      // and the mirror loads no clips -- but that is a property of the CALLERS,
-      // not of this block. Wiring head tracking into the duel means giving this
-      // the same handover the girdle has above: 18 degrees, measured, is what
-      // that clip holds a bone away from bind.
       if (headRig && headActive) {
         // Ease toward the target, and back to zero when it is dropped, so a
         // head that loses tracking returns rather than staying wherever the
@@ -1543,14 +1544,32 @@ export function createDuelist(scene, {
         headLive += (wanted - headLive) * ease;
         headPitchLive += (wantedPitch - headPitchLive) * ease;
         for (const part of headRig) {
-          part.bone.quaternion.copy(part.rest);
-          part.bone.rotateOnAxis(part.yawAxis, headLive * part.share);
-          // Negative: rotating about the body's LEFT tips the face down, so
-          // looking up is the other way round. Verified against the head bone's
-          // own forward direction rather than reasoned about -- see the probe
-          // note in the commit that added it.
-          part.bone.rotateOnAxis(part.pitchAxis, -headPitchLive * part.share);
+          // ── Take the bone over from where it IS, not from bind ──
+          //
+          // The duel's clips animate `neck` and `Head`; measured on this rig,
+          // one holds a bone up to 18 degrees away from its bind pose. Copying
+          // `rest` on the first frame of a look therefore snapped the head that
+          // far in a single frame, every time tracking picked the face up.
+          //
+          // The mirror could never show this, having no clips at all -- which
+          // is why this block carried a warning instead of a fix until the duel
+          // actually needed to look at something.
+          if (!part.holding) {
+            part.pose.copy(part.bone.quaternion);
+            part.holding = true;
+          }
+          _headWant.copy(part.rest)
+            .multiply(_headSpin.setFromAxisAngle(part.yawAxis, headLive * part.share))
+            // Negative: rotating about the body's LEFT tips the face down, so
+            // looking up is the other way round. Verified against the head
+            // bone's own forward direction rather than reasoned about.
+            .multiply(_headSpin2.setFromAxisAngle(part.pitchAxis, -headPitchLive * part.share));
+          part.pose.slerp(_headWant, ease);
+          part.bone.quaternion.copy(part.pose);
         }
+      } else if (headRig) {
+        // Nothing to say: give the bones back, so the clips own them again.
+        for (const part of headRig) part.holding = false;
       }
 
       // The wrist, after the fingers and after the arm IK has put the hand
