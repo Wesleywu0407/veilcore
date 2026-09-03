@@ -270,12 +270,46 @@ function handTarget(side, at, pose) {
 
   // Raw picture offset, shoulder to hand. Both x's un-flip, and the two `1 -`
   // cancel into the subtraction the other way round.
-  const dx = (held.x - at.x) / held.scale;
-  const dy = -(at.y - held.y) / held.scale;
+  let dx = (held.x - at.x) / held.scale;
+  let dy = -(at.y - held.y) / held.scale;
+
+  // ── Keep the target ON the sphere the hand can reach, never outside it ──
+  //
+  // The depth below is the rest of a unit vector, so as long as the flat part
+  // is within one arm the target lands at exactly armReach and the arm can
+  // always make it. Past one arm the old code just set the depth to zero and
+  // sent the target out anyway -- unreachable. Measured over a sweep of the
+  // reach space: at dx -0.9 the elbow hyperextended to 178 degrees and the hand
+  // finished a quarter of an arm SHORT of where it was sent.
+  //
+  // That is both halves of "the arm looks wrong" at once: a stick where there
+  // should be a bend, and a hand that stops following you. Scaling the flat
+  // part back to one instead makes the mapping saturate at the edge of reach --
+  // the arm straightens out to full extension and stays there, which is what
+  // your own arm does.
   const flat = Math.hypot(dx, dy);
-  const dz = flat >= 1 ? 0 : Math.sqrt(1 - flat * flat) * REACH_DEPTH;
-  return avatar.reachOffset(side, dx, dy, dz, _handTarget);
+  if (flat > 1) { dx /= flat; dy /= flat; }
+  const settled = Math.min(1, flat);
+  const dz = Math.sqrt(1 - settled * settled) * REACH_DEPTH;
+
+  // ── And never all the way out ──
+  //
+  // Mapping your full reach onto the character's full reach sounds right and
+  // looks wrong: a two-bone solver hits armReach with the elbow at 178 degrees,
+  // which is a locked joint, and a locked joint is a stick with a bump in it.
+  // People do not lock their elbows -- even reaching for something at the edge
+  // of your span there is a few degrees left in it, and that little bend is a
+  // surprising amount of what reads as a limb rather than a prop.
+  //
+  // It also keeps the solver off its own singularity, where the bend plane
+  // stops being defined and the elbow can flip between frames on noise alone.
+  return avatar.reachOffset(
+    side, dx * REACH_FULL, dy * REACH_FULL, dz * REACH_FULL, _handTarget);
 }
+
+// How far out the character goes when you are at full stretch. Not 1: see the
+// note in handTarget().
+const REACH_FULL = 0.93;
 
 // How much of the leftover length to spend on depth. Not 1: a hand held at
 // shoulder height in front of you is not at full stretch toward the lens.
@@ -346,7 +380,10 @@ function driveBody(frame) {
   // A held shoulder is only good while it is still YOUR shoulder. Once the
   // hands are gone the body may be somewhere else entirely by the time they
   // come back, so the hold ends with them rather than outliving them.
-  if (!frame.tracked) { lastAnchor.left = lastAnchor.right = null; }
+  if (!frame.tracked) {
+    lastAnchor.left = lastAnchor.right = null;
+    lastBend.left = lastBend.right = null;
+  }
   // A lone hand arrives with its real side on it: the body model places it, and
   // a latch holds that answer between body samples. See sideOfWrist().
   //
@@ -445,16 +482,31 @@ const _elbow = new THREE.Vector3();
  * the body model is genuinely good at: it drops depth constantly, but which way
  * an elbow leans is exactly what it can see.
  */
+// The last bend each arm was given, held for the same reason the shoulder
+// anchor is -- and it is the more urgent of the two.
+//
+// The elbow is the least visible joint on the chain: MediaPipe drops it
+// whenever an arm passes in front of the torso, which is most of casting. When
+// the hint goes, the IK falls back to the constructor's fixed pole, and that
+// pole points DOWN AND BACK -- correct when it was written, with hands held
+// near the chest, and wrong now that the depth model puts them up to 0.85 of an
+// arm out in front. An elbow hinted behind a hand that is far forward is a
+// wrenched arm, and it appears and disappears with the pose.
+//
+// An elbow one sample old is a perfectly good elbow.
+const lastBend = { left: null, right: null };
+
 function elbowTarget(side, arm) {
-  if (!arm?.elbow || !arm?.shoulder) return null;
   // The offset from the tracked shoulder, in raw picture coordinates: both x's
   // un-flip, and the two `1 -` cancel into a subtraction the other way round.
-  return avatar.elbowHint(
-    side,
-    arm.shoulder.x - arm.elbow.x,
-    arm.elbow.y - arm.shoulder.y,
-    _elbow,
-  );
+  if (arm?.elbow && arm?.shoulder) {
+    lastBend[side] = {
+      dx: arm.shoulder.x - arm.elbow.x,
+      dy: arm.elbow.y - arm.shoulder.y,
+    };
+  }
+  const held = lastBend[side];
+  return held ? avatar.elbowHint(side, held.dx, held.dy, _elbow) : null;
 }
 
 // ─── Readout ──────────────────────────────────────────────────────────────────
