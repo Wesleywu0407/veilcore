@@ -81,6 +81,7 @@ const _twSpin = new THREE.Quaternion();
 const _twVec = new THREE.Vector3();
 const _twWorld = new THREE.Quaternion();
 const _twParent = new THREE.Quaternion();
+const _tipBack = new THREE.Vector3();
 const _girdleTarget = new THREE.Vector3();
 const _headWant = new THREE.Quaternion();
 const _headSpin = new THREE.Quaternion();
@@ -643,6 +644,31 @@ export function createDuelist(scene, {
   // Per hand: the bone chains, their rest rotations, where the player's fingers
   // are, and where ours have eased to so far.
   let fingerChains = null;
+
+  /**
+   * The index fingertip in world space, or the wrist on a rig without fingers.
+   *
+   * A plain closure rather than a method, and called as one everywhere: the
+   * cast spark reads it from inside update(), and depending on `this` there
+   * would break the moment anyone destructured the avatar's methods -- which is
+   * exactly the kind of failure that only shows up while tracking is running.
+   */
+  function fingertipOf(out) {
+    const chain = fingerChains?.right?.index;
+    if (!chain || chain.length < 3) {
+      if (!armIK) return null;
+      root.updateMatrixWorld(true);
+      armIK.bones.wrist.getWorldPosition(out);
+      return out;
+    }
+    root.updateMatrixWorld(true);
+    chain[2].bone.getWorldPosition(out);
+    chain[1].bone.getWorldPosition(_tipBack);
+    // A bone's world position is its JOINT, not its end, so the tip is one more
+    // segment along the same line. That length is measured off the rig rather
+    // than guessed, so it stays right if the character is rebuilt at any scale.
+    return out.add(_tipBack.subVectors(out, _tipBack));
+  }
   const fingerTarget = { left: {}, right: {} };
   const fingerLive = { left: {}, right: {} };
   for (const side of ['left', 'right']) {
@@ -1028,6 +1054,22 @@ export function createDuelist(scene, {
       armIK.bones.wrist.getWorldPosition(out);
       return out;
     },
+    /**
+     * World position of the INDEX FINGERTIP, for anything a person would
+     * expect to come out of the end of their finger.
+     *
+     * The wrist was standing in for this everywhere, which put the rune's line,
+     * its halo and its spark a whole hand behind where the player was pointing
+     * -- fine while the hand was a mitten with no joints, and obviously wrong
+     * the moment it grew fingers you could see.
+     *
+     * The rig's deepest index bone is Index3, and a bone's world position is
+     * its JOINT, not its end -- so the tip is one more segment along the same
+     * direction. That length is measured off the rig (Index2 to Index3) rather
+     * than guessed, so it stays right if the character is ever rebuilt at
+     * another scale.
+     */
+    fingertipWorld(out) { return fingertipOf(out); },
     /**
      * World position of the bow hand, for a camera that has to frame it.
      *
@@ -1483,12 +1525,17 @@ export function createDuelist(scene, {
         if (castFocus.ready) {
           castFocus.group.visible = castSparkEnabled && reachWeight > 0.01;
           if (castFocus.group.visible) {
-            // Positioned from the wrist's world transform each frame rather than
-            // parented to the bone: the Armature carries a 0.01 scale, so a child
-            // of the bone inherits it and every size here would be in whatever
-            // units that rig happened to export in.
+            // Positioned from a world transform each frame rather than parented
+            // to the bone: the Armature carries a 0.01 scale, so a child of the
+            // bone inherits it and every size here would be in whatever units
+            // that rig happened to export in.
+            //
+            // The FINGERTIP, like the rune it belongs to. It was the wrist,
+            // which put the charge a whole palm behind the point the player was
+            // drawing with -- unnoticeable on a mitten, plainly wrong on a hand
+            // whose fingers you can watch move.
             root.updateMatrixWorld(true);
-            armIK.bones.wrist.getWorldPosition(_sparkPos);
+            fingertipOf(_sparkPos);
             castFocus.group.position.copy(root.worldToLocal(_sparkPos));
             castFocus.group.scale.setScalar((0.55 + chargeGlow * 1.05) * reachWeight);
             castFocus.mount.rotation.y += dt * (1.1 + chargeGlow * 4.2);

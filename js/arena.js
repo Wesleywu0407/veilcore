@@ -410,7 +410,11 @@ function castRingfall(charge, now, { free = false } = {}) {
   const amount = lerp(DUEL.ringfallDamageMin, DUEL.ringfallDamageMax, power);
   _ringfallEnd.copy(_castOrigin).addScaledVector(_castDirection, length);
   hitPlayerRingfall(_castOrigin, _ringfallEnd, radius, amount);
-  const visualOrigin = playerAvatar.handWorld(_ringfallVisualOrigin) ?? _castOrigin;
+  // Out of the FINGERTIP, not the wrist. A spell leaving a hand a whole palm
+  // behind where the player is pointing was invisible while that hand had no
+  // joints, and is the first thing you see once it does. fingertipWorld() falls
+  // back to the wrist on a rig without fingers, so this is safe either way.
+  const visualOrigin = playerAvatar.fingertipWorld(_ringfallVisualOrigin) ?? _castOrigin;
   playerHalo.release(visualOrigin, _castDirection, power);
   sendRoomEvent({ kind: 'cast', spell: 'ringfall', power, target: targetMode });
   cooldowns.ringfall = DUEL.ringfallCooldown;
@@ -1595,7 +1599,8 @@ function releaseSimulatedCharge(now) {
 
 function updateHaloCharge(charging, charge) {
   if (!charging) return;
-  const hand = playerAvatar.handWorld(_handWorld);
+  // The halo gathers where the rune is being drawn, which is the fingertip.
+  const hand = playerAvatar.fingertipWorld(_handWorld);
   if (!hand) return;
   _haloForward
     .subVectors(targetMode === 'core' ? arena.cores.opponent.position : opponentPosition, hand)
