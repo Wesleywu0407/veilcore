@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { POSE, readPose, elbowHint, sideOfWrist, createSideLatch, createLatch, handsCrossed,
   readHead, HEAD_LIMIT, headPitch, createHeadLevel,
-  HEAD_PITCH_LIMIT, createArmSpan } from '../js/spell-room/pose.js';
+  HEAD_PITCH_LIMIT, createArmSpan, handsRaised } from '../js/spell-room/pose.js';
 
 /**
  * A body standing square to the camera, already un-mirrored: the player's right
@@ -467,4 +467,49 @@ test('one generous frame cannot set the scale, and three can', () => {
   assert.equal(span.widths, honest, 'nor two');
   span.feed(arm(0.16, 0.14), 0.16);
   assert.ok(span.widths > honest, 'but three consistent readings are an arm');
+});
+
+// ── Both hands up ─────────────────────────────────────────────────────────────
+
+const shouldersAt = (y = 0.4, span = 0.2) => ({
+  left: { shoulder: { x: 0.5 - span / 2, y } },
+  right: { shoulder: { x: 0.5 + span / 2, y } },
+});
+const wrists = (...ys) => ys.map(y => ({ wrist: { x: 0.5, y } }));
+
+test('both wrists above the shoulder line is a guard', () => {
+  assert.equal(handsRaised(wrists(0.15, 0.15), shouldersAt()), true);
+});
+
+test('one hand up is not', () => {
+  assert.equal(handsRaised(wrists(0.15, 0.7), shouldersAt()), false);
+});
+
+test('hands at your sides are not, which is the whole point', () => {
+  // The failure this replaced: an arm resting at your side closes the hand, and
+  // a closed off hand used to arm the guard.
+  assert.equal(handsRaised(wrists(0.75, 0.75), shouldersAt()), false);
+});
+
+test('it takes more to raise than to hold, so a sag is not a weapon change', () => {
+  const pose = shouldersAt();
+  const sagging = wrists(0.375, 0.375);        // inside the band
+  assert.equal(handsRaised(sagging, pose, false), false, 'not enough to raise');
+  assert.equal(handsRaised(sagging, pose, true), true, 'but enough to hold');
+});
+
+test('it means the same thing near the lens and far from it', () => {
+  // Everything grows together when the player leans in, so a margin in pixels
+  // would be a different posture at every distance. This one is in shoulder
+  // widths, the same lesson as the arm scale.
+  const far = handsRaised(wrists(0.30, 0.30), shouldersAt(0.4, 0.2));
+  const near = handsRaised(wrists(0.20, 0.20), shouldersAt(0.4, 0.4));
+  assert.equal(far, near, 'the same pose at two distances should agree');
+});
+
+test('no body, or one hand, is never a guard', () => {
+  assert.equal(handsRaised(wrists(0.1, 0.1), null), false);
+  assert.equal(handsRaised(wrists(0.1), shouldersAt()), false);
+  assert.equal(handsRaised([], shouldersAt()), false);
+  assert.equal(handsRaised(wrists(0.1, 0.1), { left: { shoulder: { x: 0.4, y: 0.4 } } }), false);
 });

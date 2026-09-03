@@ -514,3 +514,38 @@ export function createArmSpan() {
     reset() { best = []; widths = 0; quiet = 0; settled = false; },
   };
 }
+
+// How far above the shoulder line both wrists have to get, in shoulder widths,
+// and how far back down before it lets go. A band, not a line: a posture held
+// near a single threshold flickers, and a flickering posture here changes
+// WEAPON, which is the most expensive thing a wobble can do in this game.
+export const RAISED_ENTER = 0.18;
+export const RAISED_EXIT = 0.06;
+
+/**
+ * Whether both hands are held up, as a guard is.
+ *
+ * A posture, deliberately, and not a finger count. The off-hand sign reads a
+ * number the player is choosing to show; this reads where their arms ARE. That
+ * distinction is the whole reason it exists: a guard was previously "the off
+ * hand shows zero fingers", and a hand that is simply hanging by your side,
+ * relaxed, reads as zero. So resting your arm put the duel into a guard, which
+ * is not a thing anyone asked for and is hard to even notice you did.
+ *
+ * Measured against the SHOULDER LINE rather than a height in the frame, and in
+ * shoulder widths rather than pixels, so it means the same thing whether the
+ * player is sitting close or standing back. `wasRaised` carries the previous
+ * answer and picks which side of the band applies.
+ */
+export function handsRaised(hands, pose, wasRaised = false) {
+  if (!Array.isArray(hands) || hands.length < 2) return false;
+  const left = pose?.left?.shoulder;
+  const right = pose?.right?.shoulder;
+  const shoulders = shoulderSpan(pose);
+  if (!left || !right || !shoulders) return false;
+
+  const line = (left.y + right.y) / 2;
+  const margin = shoulders * (wasRaised ? RAISED_EXIT : RAISED_ENTER);
+  // y grows DOWN the picture, so "above the shoulders" is a smaller y.
+  return hands.every(hand => hand?.wrist && hand.wrist.y < line - margin);
+}

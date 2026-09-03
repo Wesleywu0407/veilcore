@@ -23,26 +23,57 @@
 // 'bow' on the release frame and reset the draw before the shot was reported.
 
 import { createSignState, handSign } from './hand-sign.js';
+import { handsRaised } from './pose.js';
 
-/** What each count on the off hand asks for. */
-export const SIGN_MODES = Object.freeze({ 0: 'fist', 1: 'magic', 2: 'bow' });
+/**
+ * What each count on the off hand asks for.
+ *
+ * ── Why zero is not in here ──
+ *
+ * It used to be: zero fingers meant the guard. But zero is what a hand does
+ * when it is not doing anything -- an arm hanging at your side reads as a
+ * closed hand, so resting put the duel into a guard, silently, and there was
+ * no gesture the player could think of that would explain it.
+ *
+ * The guard is a POSTURE now: both hands up, which is what a guard actually
+ * looks like and what nobody does by accident. See handsRaised(). Zero joins
+ * three and four in meaning "nothing recognised", which holds the current mode
+ * rather than dumping the player somewhere they did not ask for.
+ */
+export const SIGN_MODES = Object.freeze({ 1: 'magic', 2: 'bow' });
+
+/** The mode both hands held up asks for. */
+export const GUARD_MODE = 'fist';
 
 export function createInputMode() {
   let mode = 'magic';
+  let raised = false;
   const offHand = createSignState();
 
   return {
     get mode() { return mode; },
     /** The settled count on the off hand, or null before one has settled. */
     get sign() { return offHand.sign ?? null; },
+    /** True while both hands are up. */
+    get guarding() { return raised; },
     reset() {
       mode = 'magic';
+      raised = false;
       offHand.pending = null;
       offHand.held = 0;
       offHand.sign = null;
     },
-    update(hands) {
+    update(hands, pose = null) {
       let next = mode;
+
+      // The posture is read FIRST and wins: it is a whole-body statement, and a
+      // player with both hands up is not also trying to show you a number.
+      raised = handsRaised(hands, pose, raised);
+      if (raised) {
+        const transition = { mode: GUARD_MODE, previous: mode, changed: GUARD_MODE !== mode };
+        mode = GUARD_MODE;
+        return transition;
+      }
 
       if (!hands?.length) {
         // Nothing in frame. Runes need only the one hand, so that is the state

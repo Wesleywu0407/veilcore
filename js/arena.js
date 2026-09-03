@@ -1365,7 +1365,9 @@ function updateHand(now) {
     return;
   }
   const frame = getFrame();
-  const mode = inputMode.update(frame.hands);
+  // The pose goes across too: the guard is now both hands raised, which is a
+  // posture measured against the shoulder line rather than a count of fingers.
+  const mode = inputMode.update(frame.hands, frame.pose);
 
   if (mode.mode === 'fist') {
     if (mode.changed) {
@@ -2205,9 +2207,20 @@ function drawHud(now, botState) {
   // What the off hand is asking for. The whole reason the mode is a held-up
   // number rather than a wrist angle is that the player can be sure of it --
   // which only holds if they can see the game agreeing with them.
-  if (tracking && inputMode.sign !== null) {
+  //
+  // And the three gestures are spelled out whenever tracking is on but nothing
+  // has been asked for yet, because a gesture nobody can discover is a gesture
+  // nobody uses: there is no menu here to find them in.
+  if (tracking) {
     ctx.fillStyle = GOLD;
-    ctx.fillText(`OFF HAND ${inputMode.sign} · ${SIGN_MODES[inputMode.sign] ?? 'held'}`, 24, height - 44);
+    if (inputMode.guarding) {
+      ctx.fillText('BOTH HANDS UP · guard', 24, height - 44);
+    } else if (inputMode.sign !== null && SIGN_MODES[inputMode.sign]) {
+      ctx.fillText(`OFF HAND ${inputMode.sign} · ${SIGN_MODES[inputMode.sign]}`, 24, height - 44);
+    } else {
+      ctx.fillStyle = '#7f899f';
+      ctx.fillText('off hand · 1 rune · 2 bow · both hands up guard', 24, height - 44);
+    }
   }
   ctx.fillStyle = '#7f899f';
   if (lastCast && now - lastCastAt < 1800) {
