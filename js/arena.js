@@ -262,6 +262,10 @@ let tracking = false;
 let running = false;
 let worldTime = 0;
 let playerCharging = false;
+// Whether a rune is actually being drawn right now. The camera frames a cast
+// off THIS and not off `playerAvatar.reaching`: the arm follows you whenever
+// you are tracked at all, so reaching is true nearly always. See updateCamera.
+let playerCasting = false;
 let perfTime = 0;
 let perfFrames = 0;
 const bowState = createBowState();
@@ -1209,10 +1213,11 @@ function updateCamera(dt) {
   // I introduced by freeing the arm without noticing the camera was reading it
   // as a cast.
   //
-  // With the skills out of the loop there is nothing to frame. When they come
-  // back this wants to key off the cast's own state, not off whether the arm
-  // happens to be moving. See updateHand().
-  const wantCast = 0;
+  // So it keys off the cast, which is the thing the shot is for: the gate is
+  // shut and a rune is being drawn. Never in a stance -- the bow and the fists
+  // have a camera of their own, and two of them fighting over the lens is what
+  // this shot looked like before.
+  const wantCast = playerCasting && !eyeMode ? 1 : 0;
   const wantBow = eyeMode ? 1 : 0;
   castFraming += (wantCast - castFraming) * Math.min(1, dt * 9);
   bowFraming += (wantBow - bowFraming) * Math.min(1, dt * BOW_MOVE_RATE);
@@ -1476,34 +1481,128 @@ roomCodeInput?.addEventListener('input', () => {
 });
 
 /**
- * The tracked body, and nothing else.
+ * The hand, and what it is allowed to do with itself.
  *
- * ── What used to be here ──
+ * Three consumers of the same camera, and the off hand's finger count picks
+ * which one is running: a fist for the guard, one finger for runes, two for the
+ * bow. See input-mode.js -- the count is what the player can look down at and
+ * be sure of, which the roll of the wrists never was.
  *
- * Everything: the sign recogniser choosing a weapon, the rune gate, the cast
- * state machine, the bow's draw and loose, the boxing detector, and three
- * overlay layers. Each of them read the same hands and each of them had an
- * opinion about the body, and between them the character was never simply the
- * player's -- it was on loan from whichever system held it that frame.
+ * ── The rule the rebuild kept ──
  *
- * They are all still in this file and none of them are called. That is
- * deliberate: the skills are being redesigned from scratch, and the raw
- * material -- updateCast, bowState, boxing, inputMode, the spell definitions --
- * is worth more sitting here than deleted. Wire them back in one at a time,
- * onto a body that already works.
- *
- * The one rule the rebuild should keep: nothing but body.drive() may pose the
- * skeleton. Everything that broke on the way here broke by ignoring it.
+ * Nothing but body.drive() may pose the skeleton, and it runs ONCE, above every
+ * branch. Before the skills came out, each mode posed the body its own way --
+ * the bow drove both arms into a draw, the fists into a guard, the rune gate
+ * owned the right arm and dropped it whenever you stopped pinching -- so the
+ * character was never yours, it was on loan from whichever system held it that
+ * frame. Everything below aims, fires and does damage. None of it touches a
+ * bone.
  */
 function updateHand(now) {
   if (!tracking) {
     playerCharging = false;
+    playerCasting = false;
+    updateDebugBow();
     return;
   }
-  const seen = body.drive(getFrame());
+  const frame = getFrame();
+  // The pose goes across too: the guard is now both hands raised, which is a
+  // posture measured against the shoulder line rather than a count of fingers.
+  const mode = inputMode.update(frame.hands, frame.pose);
+
+  const seen = body.drive(frame);
   bodyPlacement = seen.placement;
   bodyReadout = seen.readout;
-  void now;
+
+  if (mode.mode === 'fist') {
+    if (mode.changed) {
+      resetMagic();
+      bowState.reset();
+      bowAim.reset();
+      bowRead = null;
+      bowView.setVisible(false);
+      // Fresh baselines. Carrying the ones from before the wrists rolled would
+      // measure this stance against how the hands sat in the last one.
+      boxing.reset();
+    }
+    bowMode = false;
+    fistMode = true;
+    playerCasting = false;
+    const fists = boxing.update(frame.hands, now);
+    punchInRange = opponentInPunchRange();
+    // A raised guard is not a telegraph. Leaving this on would have the rival
+    // shield itself for as long as the fists are up, which is the whole match.
+    playerCharging = false;
+    if (fists.left.punched) throwPunch('left', now);
+    if (fists.right.punched) throwPunch('right', now);
+    drawFistLayer(frame, fists);
+    return;
+  }
+
+  if (mode.mode === 'bow') {
+    if (mode.changed) {
+      resetMagic();
+      bowAim.reset();
+      fistMode = false;
+      boxing.reset();
+    }
+    bowMode = true;
+    playerCasting = false;
+    bowRead = bowState.update(frame.hands, now);
+    playerCharging = bowRead.phase === 'nocked' && bowRead.draw > 0.2;
+    bowStringSide = bowRead.stringSide ?? bowStringSide;
+    bowView.setVisible(playerAvatar.drawing);
+    bowView.setNocked(bowRead.phase === 'nocked');
+    bowView.setDraw(bowRead.phase === 'nocked' ? bowRead.draw : 0);
+
+    if (bowRead.phase === 'nocked' && bowRead.bowWrist) {
+      bowAim.update(bowRead.bowWrist, bowRead.draw, now);
+    }
+    if (bowRead.event?.type === 'loosed') {
+      fireBow(bowRead.event.power, now, bowAim.reticle);
+      bowAim.reset();
+    } else if (bowRead.phase !== 'nocked') {
+      bowAim.reset();
+    }
+    drawBowLayer(frame, bowRead);
+    return;
+  }
+
+  if (mode.changed || bowMode || fistMode) {
+    bowState.reset();
+    bowAim.reset();
+    bowRead = null;
+    bowMode = false;
+    bowView.setVisible(false);
+    boxing.reset();
+    fistMode = false;
+    punchInRange = false;
+    resetMagic();
+  }
+  // A held shoulder is only good while it is still YOUR shoulder: once the
+  // hands are gone the body may be somewhere else by the time they come back.
+  if (!frame.tracked) body.forget();
+
+  const gate = isPinching(frame.tracked ? frame.landmarks : null, frame.handScale, now);
+  const cast = updateCast(gate && frame.tracked, frame.tip, now);
+  const ringfallCharging = cast.phase === 'charging' && cast.rune?.id === 'ringfall';
+  playerCharging = cast.phase === 'charging';
+  // What the camera frames a cast off. `idle` is a hand doing nothing in the
+  // rune mode, which is most of the time and is not a shot.
+  playerCasting = cast.phase !== 'idle';
+  // The ring forms at the hand while the charge is held, and only then goes.
+  // Ringfall only: Aegis and Gravity Seal are not this shape and borrowing the
+  // halo for them would make the charge stop telling you which rune you drew.
+  updateHaloCharge(ringfallCharging, cast.charge);
+  if (cast.event?.type === 'fired') castPlayerSpell(cast.event.rune.id, cast.event.charge, now);
+  else if (cast.event?.type === 'overloaded') {
+    flashUntil = now + 520;
+    flashKind = 'overload';
+  } else if (cast.event?.type === 'fizzled') {
+    flashUntil = now + 240;
+    flashKind = 'fizzle';
+  }
+  drawHandLayer(frame, gate, cast);
 }
 
 
