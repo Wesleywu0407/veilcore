@@ -45,15 +45,23 @@ export const DUEL = Object.freeze({
   // spell: the push is a nudge and the duration is a window, but this is what
   // makes standing in one a decision.
   //
-  // Was 0.42. At playerSpeed 5.5 that left 2.31 a second, and a fully charged
-  // seal is 5.8 across and stands 3.4 seconds -- so you walked out of the middle
-  // of the worst one it can cast with most of a second to spare, and the spell
-  // was a suggestion. 0.32 leaves 1.76, which is 3.3 seconds to cross 5.8: out
-  // by a tenth of a second, and only if you start moving the instant it lands.
+  // Was 0.42, then 0.32, now 0.25 -- at playerSpeed 5.5 that is 1.38 a second,
+  // a quarter of a walk.
   //
-  // Deliberately ON that edge rather than past it. A seal you cannot leave is
-  // not a decision either, it is just a stun.
-  gravitySlow: 0.32,
+  // ── What this number does NOT decide ──
+  //
+  // Whether you get out. The seal also shoves its victim outward at gravityPush,
+  // 2.5 a second at a flick and 5.7 at a full charge, and that is applied every
+  // frame they are inside the radius. A flick pushes 4.25 metres over its 1.7
+  // seconds against a radius of 3.4; a full charge pushes nineteen over 3.4
+  // seconds against a radius of 5.8. The shove ejects you either way, and it is
+  // two to four times faster than the slowed walk, so it wins.
+  //
+  // What the slow decides is how much you can STEER while being shoved -- which
+  // way you leave, and whether you can turn and face the caster on the way out.
+  // Lower it further and the victim is a passenger; that is a real change, but
+  // it is not "harder to escape".
+  gravitySlow: 0.25,
   // The bow is an aimed alternative to Ringfall, so its first balance pass uses
   // the same economy and damage envelope. Only aim, rather than a free discount,
   // is allowed to distinguish it until the duel has been played by hand.
