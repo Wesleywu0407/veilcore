@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { buildArena, buildEnvironment } from './arena/scene.js';
 import { DUEL } from './arena/config.js';
 import { createDuelist } from './arena/duelist.js';
-import { fingerCurls, palmBasis, FINGERS } from './spell-room/fingers.js';
+import { FINGERS } from './spell-room/fingers.js';
 import { createBodyMap, anchorOf, ARM_IN_SPANS } from './spell-room/body-map.js';
 import { createOpponentController } from './arena/opponent.js';
 import { createSpellSystem } from './arena/spell-system.js';
@@ -773,6 +773,10 @@ const _opponentFacing = new THREE.Vector3();
 
 // The one implementation of "where does this hand go", shared with the mirror.
 const body = createBodyMap(playerAvatar);
+// What the body map saw this frame, for the debug panel. The map owns the
+// curls now, so the panel reads them back rather than keeping its own copy.
+let bodyPlacement = null;
+let bodyReadout = { left: null, right: null };
 
 // ── The head's level, shared with the mirror ──
 //
@@ -1006,7 +1010,6 @@ function updateDebugBow() {
   bowRead = debugBow
     ? { phase: 'nocked', draw: debugDraw, peak: debugDraw, spans: 0, stringSide: debugSide }
     : null;
-  playerAvatar.drawBow(debugBow ? debugDraw : null, debugSide);
   bowView.setNocked(debugBow);
   bowView.setDraw(debugBow ? debugDraw : 0);
   bowView.setVisible(debugBow && playerAvatar.drawing);
@@ -1315,12 +1318,10 @@ async function toggleTracking() {
     bowAim.reset();
     bowRead = null;
     bowMode = false;
-    playerAvatar.drawBow(null);
     bowView.setVisible(false);
     boxing.reset();
     fistMode = false;
     punchInRange = false;
-    playerAvatar.punch(null);
     disposeTracker();
     setSelfieVisible(false);
     setStatus('webcam off');
@@ -1429,26 +1430,30 @@ function updateHand(now) {
   // posture measured against the shoulder line rather than a count of fingers.
   const mode = inputMode.update(frame.hands, frame.pose);
 
-  // Before the branches, because every one of them returns: fingers and the
-  // head belong to the player in all three modes. See driveFingers().
-  driveFingers(frame);
-
-  // The head turns with yours, in the duel as in the mirror. It reads the FACE,
-  // so it owes nothing to which weapon is up -- and a body that copies your
-  // arms while staring straight ahead is the uncanny half of the effect.
-  playerAvatar.look(
-    frame.tracked ? frame.head?.yaw : null,
-    frame.head?.pitch ?? 0,
-  );
+  // ── The body is the player's, and nothing else may pose it ──
+  //
+  // One call, before every branch, running the SAME code the mirror runs --
+  // both arms, both wrists, the fingers and the head. See body-map.js.
+  //
+  // What used to happen instead: each mode posed the body its own way. The bow
+  // drove both arms into a draw, the fists drove them into a guard, the rune
+  // gate owned the right arm and let go of it whenever you were not pinching.
+  // So the character was never yours; it was on loan from whichever system had
+  // it that frame, and no amount of correcting the tracking underneath could
+  // show through that.
+  //
+  // The game systems all still run -- they aim, they fire, they do damage. They
+  // simply no longer touch the skeleton.
+  const seen = body.drive(frame);
+  bodyPlacement = seen.placement;
+  bodyReadout = seen.readout;
 
   if (mode.mode === 'fist') {
     if (mode.changed) {
       resetMagic();
-      playerAvatar.reach(null);
       bowState.reset();
       bowAim.reset();
       bowRead = null;
-      playerAvatar.drawBow(null);
       bowView.setVisible(false);
       // Fresh baselines. Carrying the ones from before the wrists rolled would
       // measure this stance against how the hands sat in the last one.
@@ -1457,7 +1462,6 @@ function updateHand(now) {
     bowMode = false;
     fistMode = true;
     const fists = boxing.update(frame.hands, now);
-    playerAvatar.punch({ left: fists.left.extension, right: fists.right.extension });
     punchInRange = opponentInPunchRange();
     // A raised guard is not a telegraph. Leaving this on would have the rival
     // shield itself for as long as the fists are up, which is the whole match.
@@ -1471,17 +1475,14 @@ function updateHand(now) {
   if (mode.mode === 'bow') {
     if (mode.changed) {
       resetMagic();
-      playerAvatar.reach(null);
       bowAim.reset();
       fistMode = false;
-      playerAvatar.punch(null);
       boxing.reset();
     }
     bowMode = true;
     bowRead = bowState.update(frame.hands, now);
     playerCharging = bowRead.phase === 'nocked' && bowRead.draw > 0.2;
     bowStringSide = bowRead.stringSide ?? bowStringSide;
-    playerAvatar.drawBow(bowRead.draw, bowStringSide);
     bowView.setVisible(playerAvatar.drawing);
     bowView.setNocked(bowRead.phase === 'nocked');
     bowView.setDraw(bowRead.phase === 'nocked' ? bowRead.draw : 0);
@@ -1504,12 +1505,10 @@ function updateHand(now) {
     bowAim.reset();
     bowRead = null;
     bowMode = false;
-    playerAvatar.drawBow(null);
     bowView.setVisible(false);
     boxing.reset();
     fistMode = false;
     punchInRange = false;
-    playerAvatar.punch(null);
     resetMagic();
   }
   // A held shoulder is only good while it is still YOUR shoulder: once the
@@ -1529,28 +1528,9 @@ function updateHand(now) {
   // makes. See js/spell-room/body-map.js.
   const runeHand = frame.hands?.find(h => (h.bodySide ?? h.side) === 'right')
     ?? (frame.hands?.length === 1 ? frame.hands[0] : null);
-  // ── The arm is YOURS, not the rune system's ──
-  //
-  // This was gated on `gate` -- on isPinching. So the duelist's arm followed
-  // you only while you held a pinch and dropped to rest the instant you let go:
-  // the body was on loan from the spell, and every gesture that was not a cast
-  // was performed by a statue. In the mirror the arm has always followed
-  // unconditionally, and that difference is most of why one felt like you and
-  // the other did not.
-  //
-  // The pinch still decides whether a RUNE is being drawn. It just no longer
-  // decides whether you have an arm.
-  playerAvatar.reach(
-    frame.tracked && runeHand
-      ? body.handTarget('right', anchorOf(runeHand), frame.pose)
-      : null,
-    cast.charge,
-    // The spark is the cast's, so it stays behind the gate -- an arm that is
-    // merely being moved should not glow as though it were charging.
-    gate && !ringfallCharging,
-    body.elbowTarget('right', frame.pose?.right),
-  );
-  drivePalms(frame);
+  // The arm, the wrist and the fingers were all driven at the top of this
+  // function by body.drive(). Nothing about a rune poses the body any more:
+  // `cast` below still decides what is being drawn and what it costs.
   playerCharging = cast.phase === 'charging';
   // The ring forms at the hand while the charge is held, and only then goes.
   // Ringfall only: Aegis and Gravity Seal are not this shape and borrowing the
@@ -1582,9 +1562,6 @@ let simCharge = null;
 function updateSimulatedCharge(dt, now) {
   if (simCharge === null) return;
   simCharge = clamp(simCharge + dt / (TUNE.CHARGE_FULL_MS / 1000), TUNE.CHARGE_MIN, 1);
-  // Park the camera-free QA hand clear of the head, so N actually exposes the
-  // held model it exists to inspect. Live tracking still uses the real tip.
-  playerAvatar.reach(simHand(), simCharge, false);
   updateHaloCharge(true, simCharge);
   void now;
 }
@@ -1883,7 +1860,7 @@ function drawSelfie(frame) {
   // the bones: all zeroes with an open hand, climbing toward one as it shuts.
   // If they move and the hand does not, the fault is in the rig; if they do not
   // move, it is in the tracking. That is the split worth being able to make.
-  const curls = _curls.right;
+  const curls = bodyReadout.right?.curl;
   if (playerAvatar.hasFingers && curls && Number.isFinite(curls.index)) {
     ctx.fillStyle = '#7f899f';
     ctx.fillText(
@@ -1926,109 +1903,14 @@ function drawSelfie(frame) {
 // every camera, at the right scale for your arm, is worth more than a hand that
 // sits under a stroke. The stroke is being redefined anyway.
 
-// ── The keyboard cast's hand ──
+// ── The fingers, the palms and the arms all live in body-map.js now ──
 //
-// J/K cast with no camera, so there is nothing to measure against a shoulder --
-// the hand simply goes where a cast holds it. Body-relative like everything
-// else, in arm lengths, so it lands in the same place on any rig.
-const _simHand = new THREE.Vector3();
-const simHand = () => playerAvatar.reachOffset('right', -0.25, 0.22, 0.62, _simHand);
-
-// ── The wrist goes through the body map, like everything else ──
-//
-// This used to build the palm from the tracker's MIRRORED landmarks and then
-// point it with the CAMERA's axes, with a -1 bolted on to cancel the chirality
-// that produced. Three wrongnesses stacked into something that looked right
-// from one angle: a mirrored hand, a frame that swung whenever the duel moved
-// its lens, and a sign compensating for both.
-//
-// The fingers were never affected -- a curl is a ratio of distances and does
-// not care which way round the world is -- which is why this survived so long
-// and why the symptom was a correct hand sitting at a wrong ANGLE on the end of
-// a correctly placed arm. See js/spell-room/body-map.js.
-
-// Scratch for the hands, one per side. These were declared inside the block the
-// camera-relative palm path lived in, and went out with it when that block was
-// deleted by range -- which is how a refactor that only meant to remove a
-// coordinate system took three live variables with it.
-const _curls = { left: {}, right: {} };
-const _palmAlong = { left: new THREE.Vector3(), right: new THREE.Vector3() };
-const _palmAcross = { left: new THREE.Vector3(), right: new THREE.Vector3() };
-
-/**
- * Which of the player's hands drives this side of the duelist.
- *
- * One hand in shot is the drawing hand, and in the duel the drawing hand is the
- * RIGHT one by construction -- reach() moves the right arm for it whichever of
- * the player's hands it physically is. So its fingers have to be the right
- * hand's too, or the duel animates one hand's fingers on the end of the other
- * one's arm.
- *
- * With two, `bodySide` where the body could tell and x otherwise. Two hands
- * held close together -- a guard -- is where x swaps on noise alone.
- */
-function handFor(hands, side) {
-  return hands.length === 1
-    ? (side === 'right' ? hands[0] : null)
-    : (hands.find(h => (h.bodySide ?? h.side) === side) ?? null);
-}
-
-/**
- * The finger bones, in EVERY mode.
- *
- * This used to live below the mode branches, all of which return before
- * reaching it -- so fingers moved while drawing a rune and were frozen solid
- * the moment you picked up the bow or put your fists up. Two thirds of the game
- * had a hand carved out of one piece, which reads as a model without finger
- * joints rather than as a missing call.
- *
- * Fingers are safe to drive everywhere precisely because nothing else touches
- * them: they are the thirty bones added after the fact, so no clip animates
- * them and neither drawBow() nor punch() poses them. Your fingers are attached
- * to your hands whatever you are holding.
- */
-function driveFingers(frame) {
-  if (!playerAvatar.hasFingers) return;
-  const hands = frame.hands ?? [];
-  for (const side of ['left', 'right']) {
-    const hand = handFor(hands, side);
-    // The same un-flipped landmarks the palm uses. A curl does not care either
-    // way, but two call sites reading the same hand through different spaces is
-    // how this file drifted from the mirror in the first place.
-    playerAvatar.fingers(side, hand ? fingerCurls(body.unflip(hand.landmarks), _curls[side]) : null);
-  }
-}
-
-/**
- * The wrist, in the RUNE mode only.
- *
- * Unlike the fingers this overrides the hand BONE, which the bow and the fists
- * both care about: a bow is gripped at a particular angle and a fist wants to
- * line up with its own forearm. Letting the tracked palm win there would twist
- * the hand off the bow. So the wrist stays where those poses put it, and only
- * the drawing hand is handed over.
- */
-function drivePalms(frame) {
-  if (!playerAvatar.hasPalm) return;
-  const hands = frame.hands ?? [];
-  for (const side of ['left', 'right']) {
-    const hand = handFor(hands, side);
-    // Only two directions are carried across, never the palm normal: the
-    // tracker's space is mirrored and the duelist's is not, so a normal would
-    // arrive pointing out of the wrong side of the hand. The duelist crosses
-    // these two itself, in its own space, where the handedness is known.
-    const basis = hand ? palmBasis(body.unflip(hand.landmarks)) : null;
-    if (basis) {
-      playerAvatar.palm(
-        side,
-        body.direction(basis.along, _palmAlong[side]),
-        body.direction(basis.across, _palmAcross[side]),
-      );
-    } else {
-      playerAvatar.palm(side, null, null);
-    }
-  }
-}
+// What stood here -- a sim hand, handFor(), driveFingers(), drivePalms() and
+// their scratch -- was a SECOND implementation of what the mirror already did.
+// Keeping two in step is what failed, over and over: the mirror world, the
+// shoulder anchor, the learned arm, the reach clamp and the palm chirality were
+// all fixed there and none of them arrived here. One implementation, one call,
+// at the top of the tracking update.
 
 // The fists, on the glass. Deliberately quiet: unlike the bow there is nothing
 // to aim, so this is a readout rather than a sight -- how far each hand has

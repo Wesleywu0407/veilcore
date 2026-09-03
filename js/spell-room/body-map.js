@@ -15,6 +15,8 @@
 
 import * as THREE from 'three';
 import { shoulderSpan, createArmSpan } from './pose.js';
+import { fingerCurls, palmBasis } from './fingers.js';
+import { bodyTracking } from './tracker.js';
 
 // An arm, measured in shoulder widths, for before the learner has an answer.
 //
@@ -138,6 +140,11 @@ export function createBodyMap(avatar) {
   const _elbow = new THREE.Vector3();
   const _origin = new THREE.Vector3();
   const _raw = [];
+  const _curls = { left: {}, right: {} };
+  const _along = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+  const _across = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+  const readout = { left: null, right: null };
+  let placement = null;
 
   function unflip(landmarks) {
     for (let i = 0; i < landmarks.length; i++) {
@@ -186,7 +193,119 @@ export function createBodyMap(avatar) {
     return avatar.root.localToWorld(out).sub(avatar.root.getWorldPosition(_origin));
   }
 
+  function drive(frame) {
+    const hands = frame.hands ?? [];
+    // A held shoulder is only good while it is still YOUR shoulder. Once the
+    // hands are gone the body may be somewhere else entirely by the time they
+    // come back, so the hold ends with them rather than outliving them.
+    if (!frame.tracked) {
+      forget();
+    }
+    // A lone hand arrives with its real side on it: the body model places it, and
+    // a latch holds that answer between body samples. See sideOfWrist().
+    //
+    // Guess ONLY when there is no body model to ask at all. It used to guess on
+    // every null, which is why raising your left arm moved the character's right
+    // -- null was the only answer a lone hand ever got. With a body loaded the
+    // side lands within a sample or two, and holding both arms still for those
+    // two frames is far better than moving the wrong one and snapping across.
+    // `bodySide` when the body could tell, `side` (sorted by x) when it could
+    // not. Crossing your arms swaps the x order and nothing else, so a mirror
+    // that only reads `side` hands each arm to the other one the moment you fold
+    // them -- an ordinary thing to do, and it looked like the handedness bug
+    // coming back.
+    const sideOf = hand => hand.bodySide ?? hand.side;
+    const mayGuess = !bodyTracking();
+    const unplaced = hands.length === 1 && sideOf(hands[0]) === null;
+    if (unplaced && !mayGuess) {
+      // The body has not named this hand yet. Do nothing at all -- not even pass
+      // null to reach(), which RELEASES an arm rather than holding it, dropping
+      // it to rest for the ~150ms the body model takes to answer and then hauling
+      // it back up. Returning leaves every target exactly where it was, which is
+      // what "not yet" ought to look like.
+      placement = 'one hand — waiting for the body to place it';
+      // Clear what the panel claims to be seeing, or it keeps drawing the hands
+      // from whatever frame ran last -- and a panel that shows two live hands
+      // while saying it cannot place one is worse than a blank one, because the
+      // whole reason it exists is to be believed when the picture is confusing.
+      readout.left = readout.right = null;
+      // The head is not waiting on anything: it reads the face, not the hands.
+      avatar.look(frame.tracked ? frame.head?.yaw : null, frame.head?.pitch ?? 0);
+      return { placement, readout };
+    }
+    const lone = unplaced ? hands[0] : null;
+    const right = hands.find(h => sideOf(h) === 'right') ?? lone;
+    const left = hands.find(h => sideOf(h) === 'left') ?? null;
+    placement = hands.length === 0 ? null
+      : hands.length === 2
+        ? (hands[0].bodySide
+          ? `both hands — body says ${hands[0].bodySide === 'right' ? 'CROSSED' : 'not crossed'}`
+          : 'both hands — sides by x, no body answer')
+      : unplaced ? 'one hand — guessing right, no body model'
+      : `one hand — body says ${sideOf(hands[0])}`;
+
+    // Both arms, because a mirror with one live arm and one hanging is not a
+    // mirror. The duel drives only the right; there the left is always holding
+    // something.
+    // Same side throughout: reach() drives the duelist's RIGHT arm, and the
+    // player's RIGHT hand is what feeds it.
+    avatar.reach(
+      frame.tracked && right ? handTarget('right', anchorOf(right), frame.pose) : null,
+      0,
+      false,
+      frame.pose?.right ? elbowTarget('right', frame.pose.right) : null,
+    );
+    avatar.reachLeft(
+      frame.tracked && left ? handTarget('left', anchorOf(left), frame.pose) : null,
+      frame.pose?.left ? elbowTarget('left', frame.pose.left) : null,
+    );
+
+    // The head turns with you. Null hands it back and it eases home, which is
+    // what should happen when the face leaves shot rather than the head staying
+    // craned wherever the last readable frame left it.
+    avatar.look(frame.tracked ? frame.head?.yaw : null, frame.head?.pitch ?? 0);
+
+    for (const side of ['left', 'right']) {
+      // The same two the arms were driven from, not a second lookup with its own
+      // copy of the rules: fingers on one hand and the arm on the other is a bug
+      // this file has room for exactly once.
+      const hand = side === 'right' ? right : left;
+      if (!hand) {
+        avatar.fingers(side, null);
+        avatar.palm(side, null, null);
+        readout[side] = null;
+        continue;
+      }
+      const raw = unflip(hand.landmarks);
+      const curl = fingerCurls(raw, _curls[side]);
+      avatar.fingers(side, curl);
+
+      const basis = palmBasis(raw);
+      if (basis) {
+        avatar.palm(
+          side,
+          direction(basis.along, _along[side]),
+          direction(basis.across, _across[side]),
+        );
+      } else {
+        avatar.palm(side, null, null);
+      }
+      readout[side] = { curl: { ...curl }, palm: Boolean(basis) };
+    }
+    return { placement, readout };
+  }
+
   return {
+    /**
+     * Drive the whole tracked body: both arms, both wrists, the fingers and the
+     * head. This IS the mirror's driveBody -- moved here rather than copied,
+     * because "the duel should behave exactly like the mirror" is a promise no
+     * amount of keeping two versions in step can keep.
+     *
+     * Returns what a debug panel wants: how the sides were decided, and the
+     * curls per hand. Nothing in here reads a camera or a game mode.
+     */
+    drive,
     unflip,
     handTarget,
     elbowTarget,
