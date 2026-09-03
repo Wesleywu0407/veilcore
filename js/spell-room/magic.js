@@ -77,16 +77,27 @@ import { LM, dist, dist3, clamp } from "./vec.js";
 // fast" meant. A probe that cannot see tremor will always recommend a filter
 // that passes it.
 //
-// Three is the knee. Lag drops by 60% -- the whole reason to touch this -- for a
-// quarter more tremor, and past it the lag improves slowly while the tremor
-// climbs steadily. Stillness never moves at any beta; that is the deadband's
-// column and not this one's.
+// ── And then the knee lost to the eye ──
+//
+// The table says three: lag down 60% for a quarter more tremor, and past it the
+// lag improves slowly while the tremor climbs steadily. It was tried at three
+// and it was still visibly jumpy in the hand, so it sits at one.
+//
+// That is the right way round. The probe is here to stop values being GUESSED
+// and to say what each one costs; it is not here to overrule somebody watching
+// the thing move. One buys back a third of the lag -- 117ms to 73 -- for 0.30px
+// of tremor, which is the part of the trade that turned out to be free. Every
+// rune still casts at an ordinary drawing pace, which is what the test in
+// spell-room.test.mjs holds this to.
+//
+// Stillness never moves at any beta; that is the deadband's column, not this
+// one's.
 //
 // minCutoff is untouched at 1.2. A hand moving slowly and deliberately gets the
 // same smoothing it always did; only the flick got most of its lag back.
 export const TIP_FILTER = {
   minCutoff: 1.2,   // lower = smoother when still
-  beta: 3,          // higher = less lag when moving fast, and more tremor.
+  beta: 1,          // higher = less lag when moving fast, and more tremor.
   dCutoff: 1.0,
   deadband: 0.002,
 };
