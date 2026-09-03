@@ -9,8 +9,9 @@ small dependency-free Node server now serves those files and owns two-player
 room codes plus WebSocket relay; solo play still works without a remote player.
 
 > **Status: playable, still being tuned.** The duel and the practice range both
-> work end to end. Runes use one hand; raising both hands switches the duel to
-> the bow. See [Where it stands](#where-it-stands).
+> work end to end. Both hands are in the air for everything: the left one holds
+> up a number that says what you are holding, the right one uses it. See
+> [Where it stands](#where-it-stands).
 
 ## Opening it
 
@@ -158,45 +159,49 @@ unprojected through the same one you are looking through. The duel keeps a
 separate `castCamera` for that, which is what once put the eye in front of the
 hand in first person and made a raised arm invisible.
 
-The camera normally decides for itself: it sits behind you, swings over your
-shoulder while you draw a rune, and goes to your own eye whenever the bow or the
-fists come up. **V** holds it at the eye regardless — which is the only way to
-watch your own hand while casting one-handed, and it works with no webcam at all.
+The duel starts **behind your own eyes**, as the mirror does — the claim is that
+the body is yours, and that reads at once from in there. **V** swaps to the chase
+camera, which sits behind you and swings over your shoulder while you draw a
+rune; the eye comes back on its own whenever the bow or the fists come up, since
+those are stances you want to watch from inside. Both work with no webcam at all.
 
-Raise **one hand** to cast runes. With **both hands** up, your off hand says
-which mode you are in by holding up a number:
+Your **left hand holds up a number** and your **right hand uses it**. Both hands
+are up for all three, which is why the number is what decides between them and
+not the posture:
 
-| off hand | |
+| left hand | |
 |---|---|
-| **fist** | guard — throw punches |
-| **one finger** | the rune hand is free to draw |
+| **one finger** | the right hand may draw a rune |
 | **two fingers** | take up the bow |
+| **a fist** | guard — throw punches |
 
 The count has to hold for about an eighth of a second before it counts, so a
-landmark glitch cannot change your weapon. The HUD shows what it read.
+landmark glitch cannot change your weapon, and a count nobody recognises — three
+fingers, or a hand caught mid-change — holds whatever is already running rather
+than dumping you somewhere you did not ask for. The HUD shows what it read, and
+says `LEFT HAND 1 to draw` when the rune hand is being held shut.
 
-The wrist-roll stance below is no longer how the mode is chosen — it was silent
-whenever the two wrists disagreed, which near the boundary is most frames, and
-that meant the mode you got depended on the mode you were already in:
+A pinch on its own is not permission: with no one held up, the right hand can
+pinch all it likes and no stroke opens. The left hand is asked at the **start**
+of a stroke and not for its whole length — it sits at the edge of the picture
+and drops out of it for a frame or two at a time, and a rune going off early
+because your other hand blinked is a worse rule than the one it enforces.
 
-- **Knuckles upright** — the fist eye pointing at the ceiling, the way a hand
-  grips a bow riser — takes up the **bow**. Close one hand on the string, pull
-  the wrists apart, aim by moving the bow hand, then open the string hand to
-  loose.
-- **Knuckles flat** — the fist eye pointing left or right, the way a straight
-  punch lands — puts up your **fists**. Drive a fist at the lens to throw it.
-  Punching costs no mana and waits on no cooldown; what it needs instead is to
-  be within 2.2 of the rival and roughly facing them.
+Sides come from the **body**, not from which hand is further right in the
+picture, so folding your arms does not hand the rune over to the wrong one.
 
-The roll is read off the line across the knuckles, and both wrists have to agree
-before the stance changes, so a single misread hand cannot switch it under you.
-Finger closure is deliberately not part of that test — opening the string hand
-is how an arrow is loosed, and a stance that watched the fingers would drop the
-bow on the release frame. Lowering either hand returns to rune casting and
-clears whichever two-handed state was running; entering either stance likewise
-clears a partial rune, so the gesture pipelines cannot fire each other by
-accident. The mirrored self view in the lower-right shows the tracked hand
-skeleton and the live mode.
+- The **bow**: left hand forward on the riser, right hand back on the string.
+  Close the string hand, pull the wrists apart, aim by moving the bow hand, then
+  open the string hand to loose. Keep the two fingers up while you shoot.
+- The **fists**: drive one at the lens to throw it. Punching costs no mana and
+  waits on no cooldown; what it needs instead is to be within 2.2 of the rival
+  and roughly facing them.
+
+Changing the number clears whatever the last one was running, including a
+partial rune, so the gesture pipelines cannot fire each other by accident. The
+mirrored self view in the lower-right shows the tracked hand skeleton — with the
+five fingertips picked out in green — the face the tracker is reading, and the
+live mode.
 
 ## The duel
 
@@ -265,8 +270,23 @@ Done:
   focus and mana-shard GLBs. They share page-level loader/cache code and keep
   their gameplay timing in the modules that own each effect.
 
+- The hand's three modes, driven off the left hand's count, with the body — not
+  the picture's x order — deciding which hand is which.
+- The rune stroke drawn through the same body map that places the arm, so it
+  lands on the sphere your arm can reach rather than stretched across the window.
+
 Open:
 
+- **The rune's placement wants a human eye.** The stroke was moved out of screen
+  space and onto the body this stretch: `strokeScreen`/`tipCorrection` in
+  `js/arena.js` and `handAt` in `js/spell-room/body-map.js`. It is right by
+  construction and has never been watched through a camera. If the rune sits off
+  the fingertip by a constant amount, that is the correction; if it is the wrong
+  SIZE, that is the arm, and the arm prints its own measurement on the panel.
+- **The arm should settle around 1.75–1.85 shoulder widths.** The self panel
+  prints `arm N.NN LOCKED`. Well above that band means something is still
+  feeding it bad frames, and everything measured off the arm — the rune's size
+  included — is that far out with it.
 - **The practice-range placement still wants a human eye** — `BOW_LENGTH`,
   `PRACTICE_BOW_MOUNT`, `NOCK_TRAVEL`, and `ARROW_LENGTH` in
   `js/arena/bow-view.js`. The duel has its own body-space mount and its right-
