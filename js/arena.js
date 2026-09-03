@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { buildArena, buildEnvironment } from './arena/scene.js';
 import { DUEL } from './arena/config.js';
 import { createDuelist } from './arena/duelist.js';
-import { fingerCurls, palmBasis } from './spell-room/fingers.js';
+import { fingerCurls, palmBasis, FINGERS } from './spell-room/fingers.js';
 import { createOpponentController } from './arena/opponent.js';
 import { createSpellSystem } from './arena/spell-system.js';
 import { createPerformanceGovernor } from './arena/performance.js';
@@ -1775,6 +1775,24 @@ function drawSelfie(frame) {
   ctx.textAlign = 'left';
   ctx.fillStyle = hands.length ? GOLD : '#8d9ab4';
   ctx.fillText(`MIRROR · ${hands.length} HAND${hands.length === 1 ? '' : 'S'} · ${mode}`, rect.left + 8, rect.top + 15);
+
+  // ── The five curls, as numbers ──
+  //
+  // The mirror has had finger bars from the start and the duel had nothing, so
+  // "are my fingers even doing anything" was unanswerable here -- and a hand
+  // seen from inside its own head, at arm's length from the lens, is a shape
+  // nobody can read an answer off. These are the values actually being sent to
+  // the bones: all zeroes with an open hand, climbing toward one as it shuts.
+  // If they move and the hand does not, the fault is in the rig; if they do not
+  // move, it is in the tracking. That is the split worth being able to make.
+  const curls = _curls.right;
+  if (playerAvatar.hasFingers && curls && Number.isFinite(curls.index)) {
+    ctx.fillStyle = '#7f899f';
+    ctx.fillText(
+      FINGERS.map(name => (curls[name] ?? 0).toFixed(2)).join(' '),
+      rect.left + 8, rect.top + 29);
+    ctx.fillStyle = GOLD;
+  }
   ctx.restore();
 }
 
