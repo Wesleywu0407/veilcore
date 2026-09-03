@@ -6,7 +6,7 @@
   <title>Veilcore — Practice Range</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=IBM+Plex+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
@@ -18,27 +18,109 @@
     .range-gl { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; }
     .range-overlay { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
     .range-video { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; top: 0; left: 0; }
-    .range-start {
-      position: fixed; inset: 0; z-index: 2;
-      display: grid; place-content: center; justify-items: center; gap: 16px;
-      background: radial-gradient(circle at 50% 34%, #1d2438 0, #0d1220 30%, #05060c 74%);
-      text-align: center; color: #cfd9ec; font-family: "IBM Plex Mono", monospace;
+    /* ── The pause panel ──
+       Escape opens this rather than leaving outright: navigating away on a
+       single keypress is not something a page should do while you are standing
+       two metres back with your hands in the air, and Escape is easy to hit by
+       accident. Leaving takes a deliberate click. */
+    .range-menu {
+      position: fixed; inset: 0; z-index: 3;
+      display: grid; place-items: center; padding: 24px;
+      background: rgba(3,4,9,.66); backdrop-filter: blur(3px);
+      font-family: "IBM Plex Mono", monospace;
     }
-    .range-start[hidden] { display: none; }
-    .range-start h1 {
-      margin: 0; font-family: "Cormorant Garamond", serif; font-weight: 400;
-      font-size: clamp(2.6rem, 7vw, 4.4rem); color: #f3ead7; letter-spacing: .06em;
+    .range-menu[hidden] { display: none; }
+    .range-menu-box {
+      position: relative; width: min(380px, 100%); text-align: center;
+      padding: clamp(24px, 3vw, 34px);
+      border: 1px solid rgba(255,230,184,.24); border-radius: 3px;
+      background: rgba(7,9,18,.95);
+      box-shadow: 0 18px 60px rgba(0,0,0,.6);
+    }
+    .range-menu h2 {
+      margin: 10px 0 0; font-family: "Cormorant Garamond", serif; font-weight: 400;
+      font-size: clamp(2rem, 5vw, 2.6rem); color: #f3ead7; letter-spacing: .06em;
+    }
+    .range-menu-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; }
+    .range-menu button {
+      padding: 13px 20px; border: 1px solid #6f8fd0; border-radius: 2px;
+      background: transparent; color: #ffe6b8; cursor: pointer;
+      font: 500 12px/1 "IBM Plex Mono", monospace; letter-spacing: .22em;
+      transition: background .2s ease;
+    }
+    .range-menu button:hover { background: #6f8fd022; }
+    /* Qualified with `button` on purpose. `.range-menu button` is a class AND a
+       type, so it outranks a lone class no matter which comes later in the
+       file -- written as just `.range-menu-close` this lost its padding reset and
+       came out 42px wide instead of 28. */
+    .range-menu button.range-menu-close {
+      position: absolute; top: 9px; right: 9px;
+      box-sizing: border-box; width: 30px; height: 30px; padding: 0;
+      border-color: rgba(255,230,184,.2); color: #93a3c0;
+      font-size: 15px; letter-spacing: 0;
+    }
+    .range-menu-note {
+      display: block; margin-top: 16px; color: #6c7a95;
+      font-size: 9px; letter-spacing: .16em; text-transform: uppercase;
     }
     .range-kicker { margin: 0; font-size: 11px; letter-spacing: .32em; color: #8ab4ff; }
     .range-sub { margin: 0; max-width: 52ch; line-height: 1.9; font-size: 13px; color: #93a3c0; }
-    .range-start button {
-      margin-top: 6px; padding: 13px 32px; border: 1px solid #6f8fd0; border-radius: 2px;
-      background: transparent; color: #ffe6b8; cursor: pointer;
-      font: 500 13px/1 "IBM Plex Mono", monospace; letter-spacing: .22em;
+    /* ── What this room is, in the corner ──
+       The cover page that used to say this is gone: it stood between the player
+       and the camera for no reason but to carry a paragraph, and the paragraph
+       is short enough to live on the glass. Top right, because both readouts
+       are drawn top left and the camera preview sits bottom right.
+
+       Set in EB Garamond rather than the mono the rest of the interface uses.
+       Everything else on this page is a NUMBER -- counts, curls, hertz, degrees
+       -- and mono is right for those because it holds its columns still while
+       they change. This is the one piece of prose in the room, and prose set in
+       a typewriter face at 11px is a wall. EB Garamond is the text companion to
+       the Cormorant already carrying the title, so the card reads as one voice
+       and the page still only has two: a serif for words, a mono for data. */
+    .range-about {
+      position: fixed; top: 18px; right: 18px; z-index: 2;
+      width: min(292px, calc(100vw - 36px));
+      padding: 18px 22px 20px;
+      border: 1px solid rgba(255,230,184,.13); border-radius: 3px;
+      background: linear-gradient(180deg, rgba(9,12,22,.86), rgba(6,9,17,.78));
+      box-shadow: 0 14px 40px rgba(0,0,0,.42);
+      backdrop-filter: blur(2px);
+      pointer-events: none;
     }
-    .range-start button:hover { background: #6f8fd022; }
-    .range-error { max-width: 46ch; padding: 10px 14px; border: 1px solid #6b3b34; color: #ff9c82; font-size: 12px; line-height: 1.6; }
+    .range-about .range-kicker {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 8px; letter-spacing: .3em; color: #6f86b8;
+    }
+    .range-about h1 {
+      margin: 9px 0 0; font-family: "Cormorant Garamond", serif; font-weight: 400;
+      font-size: 1.62rem; line-height: 1.05; color: #f3ead7; letter-spacing: .01em;
+    }
+    /* A rule, not a gap: it separates the name from the explanation without
+       spending the vertical room a corner card does not have. */
+    .range-about h1::after {
+      content: ""; display: block; width: 26px; height: 1px; margin-top: 13px;
+      background: rgba(255,230,184,.28);
+    }
+    .range-about-body {
+      margin: 12px 0 0;
+      font-family: "EB Garamond", "Cormorant Garamond", Georgia, serif;
+      font-size: 14.5px; line-height: 1.6; color: #a9b6cd;
+    }
+    /* 400, not 500: the request carries italic at 400 only, so asking for a
+       heavier italic makes the browser synthesise one by slanting and smearing
+       the upright. The gold is doing the emphasis; the italic only has to be
+       a real cut. */
+    .range-about b { color: #ffe6b8; font-weight: 400; font-style: italic; }
+    .range-error {
+      margin-top: 14px; padding: 9px 12px;
+      border: 1px solid rgba(178,86,70,.5); border-radius: 2px;
+      background: rgba(60,20,16,.34);
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 10px; line-height: 1.65; color: #ff9c82;
+    }
     .range-error[hidden] { display: none; }
+    @media (max-width: 760px) { .range-about { display: none; } }
   </style>
 </head>
 <body>
@@ -46,17 +128,25 @@
   <canvas class="range-overlay" data-range-overlay></canvas>
   <video class="range-video" data-range-video playsinline muted autoplay></video>
 
-  <section class="range-start" data-range-start>
+  <div class="range-menu" data-range-menu hidden>
+    <div class="range-menu-box" role="dialog" aria-modal="true" aria-labelledby="range-menu-title">
+      <button class="range-menu-close" type="button" data-range-menu-close aria-label="Close">&times;</button>
+      <p class="range-kicker">VEILCORE · PRACTICE RANGE</p>
+      <h2 id="range-menu-title">Paused</h2>
+      <div class="range-menu-actions">
+        <button type="button" data-range-resume>RESUME</button>
+        <button type="button" data-range-quit>RETURN TO MENU</button>
+      </div>
+      <span class="range-menu-note">Esc or Resume to carry on</span>
+    </div>
+  </div>
+
+  <aside class="range-about">
     <p class="range-kicker">VEILCORE · PRACTICE RANGE</p>
     <h1>Nock and Loose</h1>
-    <p class="range-sub">
-      Both hands up. Close the fingers of one hand on the string, pull the hands
-      apart to draw, open them to loose. The panel reports every number the bow
-      measures — tune BOW in js/spell-room/archery.js against it.
-    </p>
-    <button type="button" data-range-enter>OPEN THE RANGE</button>
+    <p class="range-about-body"><b>Two fingers</b> on your bow hand raises the bow; close the other on the string and pull apart to draw. Hold still — the ring round the crosshair closes over a second, then open the string hand to loose.</p>
     <p class="range-error" data-range-error hidden></p>
-  </section>
+  </aside>
 
   <script type="importmap">
     {

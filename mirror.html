@@ -6,7 +6,7 @@
   <title>Veilcore — Mirror</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=IBM+Plex+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
@@ -42,27 +42,109 @@
       pointer-events: none; z-index: 4;
     }
     .mirror-scan[hidden] { display: none; }
-    .mirror-start {
-      position: fixed; inset: 0; z-index: 2;
-      display: grid; place-content: center; justify-items: center; gap: 16px;
-      background: radial-gradient(circle at 50% 34%, #1d2438 0, #0d1220 30%, #05060c 74%);
-      text-align: center; color: #cfd9ec; font-family: "IBM Plex Mono", monospace;
+    /* ── The pause panel ──
+       Escape opens this rather than leaving outright: navigating away on a
+       single keypress is not something a page should do while you are standing
+       two metres back with your hands in the air, and Escape is easy to hit by
+       accident. Leaving takes a deliberate click. */
+    .mirror-menu {
+      position: fixed; inset: 0; z-index: 3;
+      display: grid; place-items: center; padding: 24px;
+      background: rgba(3,4,9,.66); backdrop-filter: blur(3px);
+      font-family: "IBM Plex Mono", monospace;
     }
-    .mirror-start[hidden] { display: none; }
-    .mirror-start h1 {
-      margin: 0; font-family: "Cormorant Garamond", serif; font-weight: 400;
-      font-size: clamp(2.6rem, 7vw, 4.4rem); color: #f3ead7; letter-spacing: .06em;
+    .mirror-menu[hidden] { display: none; }
+    .mirror-menu-box {
+      position: relative; width: min(380px, 100%); text-align: center;
+      padding: clamp(24px, 3vw, 34px);
+      border: 1px solid rgba(255,230,184,.24); border-radius: 3px;
+      background: rgba(7,9,18,.95);
+      box-shadow: 0 18px 60px rgba(0,0,0,.6);
+    }
+    .mirror-menu h2 {
+      margin: 10px 0 0; font-family: "Cormorant Garamond", serif; font-weight: 400;
+      font-size: clamp(2rem, 5vw, 2.6rem); color: #f3ead7; letter-spacing: .06em;
+    }
+    .mirror-menu-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; }
+    .mirror-menu button {
+      padding: 13px 20px; border: 1px solid #6f8fd0; border-radius: 2px;
+      background: transparent; color: #ffe6b8; cursor: pointer;
+      font: 500 12px/1 "IBM Plex Mono", monospace; letter-spacing: .22em;
+      transition: background .2s ease;
+    }
+    .mirror-menu button:hover { background: #6f8fd022; }
+    /* Qualified with `button` on purpose. `.mirror-menu button` is a class AND a
+       type, so it outranks a lone class no matter which comes later in the
+       file -- written as just `.mirror-menu-close` this lost its padding reset and
+       came out 42px wide instead of 28. */
+    .mirror-menu button.mirror-menu-close {
+      position: absolute; top: 9px; right: 9px;
+      box-sizing: border-box; width: 30px; height: 30px; padding: 0;
+      border-color: rgba(255,230,184,.2); color: #93a3c0;
+      font-size: 15px; letter-spacing: 0;
+    }
+    .mirror-menu-note {
+      display: block; margin-top: 16px; color: #6c7a95;
+      font-size: 9px; letter-spacing: .16em; text-transform: uppercase;
     }
     .mirror-kicker { margin: 0; font-size: 11px; letter-spacing: .32em; color: #8ab4ff; }
     .mirror-sub { margin: 0; max-width: 54ch; line-height: 1.9; font-size: 13px; color: #93a3c0; }
-    .mirror-start button {
-      margin-top: 6px; padding: 13px 32px; border: 1px solid #6f8fd0; border-radius: 2px;
-      background: transparent; color: #ffe6b8; cursor: pointer;
-      font: 500 13px/1 "IBM Plex Mono", monospace; letter-spacing: .22em;
+    /* ── What this room is, in the corner ──
+       The cover page that used to say this is gone: it stood between the player
+       and the camera for no reason but to carry a paragraph, and the paragraph
+       is short enough to live on the glass. Top right, because both readouts
+       are drawn top left and the camera preview sits bottom right.
+
+       Set in EB Garamond rather than the mono the rest of the interface uses.
+       Everything else on this page is a NUMBER -- counts, curls, hertz, degrees
+       -- and mono is right for those because it holds its columns still while
+       they change. This is the one piece of prose in the room, and prose set in
+       a typewriter face at 11px is a wall. EB Garamond is the text companion to
+       the Cormorant already carrying the title, so the card reads as one voice
+       and the page still only has two: a serif for words, a mono for data. */
+    .mirror-about {
+      position: fixed; top: 18px; right: 18px; z-index: 2;
+      width: min(292px, calc(100vw - 36px));
+      padding: 18px 22px 20px;
+      border: 1px solid rgba(255,230,184,.13); border-radius: 3px;
+      background: linear-gradient(180deg, rgba(9,12,22,.86), rgba(6,9,17,.78));
+      box-shadow: 0 14px 40px rgba(0,0,0,.42);
+      backdrop-filter: blur(2px);
+      pointer-events: none;
     }
-    .mirror-start button:hover { background: #6f8fd022; }
-    .mirror-error { max-width: 46ch; padding: 10px 14px; border: 1px solid #6b3b34; color: #ff9c82; font-size: 12px; line-height: 1.6; }
+    .mirror-about .mirror-kicker {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 8px; letter-spacing: .3em; color: #6f86b8;
+    }
+    .mirror-about h1 {
+      margin: 9px 0 0; font-family: "Cormorant Garamond", serif; font-weight: 400;
+      font-size: 1.62rem; line-height: 1.05; color: #f3ead7; letter-spacing: .01em;
+    }
+    /* A rule, not a gap: it separates the name from the explanation without
+       spending the vertical room a corner card does not have. */
+    .mirror-about h1::after {
+      content: ""; display: block; width: 26px; height: 1px; margin-top: 13px;
+      background: rgba(255,230,184,.28);
+    }
+    .mirror-about-body {
+      margin: 12px 0 0;
+      font-family: "EB Garamond", "Cormorant Garamond", Georgia, serif;
+      font-size: 14.5px; line-height: 1.6; color: #a9b6cd;
+    }
+    /* 400, not 500: the request carries italic at 400 only, so asking for a
+       heavier italic makes the browser synthesise one by slanting and smearing
+       the upright. The gold is doing the emphasis; the italic only has to be
+       a real cut. */
+    .mirror-about b { color: #ffe6b8; font-weight: 400; font-style: italic; }
+    .mirror-error {
+      margin-top: 14px; padding: 9px 12px;
+      border: 1px solid rgba(178,86,70,.5); border-radius: 2px;
+      background: rgba(60,20,16,.34);
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 10px; line-height: 1.65; color: #ff9c82;
+    }
     .mirror-error[hidden] { display: none; }
+    @media (max-width: 760px) { .mirror-about { display: none; } }
   </style>
 </head>
 <body>
@@ -71,18 +153,25 @@
   <video class="mirror-video is-tucked" data-mirror-video playsinline muted autoplay></video>
   <canvas class="mirror-scan" data-mirror-scan hidden></canvas>
 
-  <section class="mirror-start" data-mirror-start>
+  <div class="mirror-menu" data-mirror-menu hidden>
+    <div class="mirror-menu-box" role="dialog" aria-modal="true" aria-labelledby="mirror-menu-title">
+      <button class="mirror-menu-close" type="button" data-mirror-menu-close aria-label="Close">&times;</button>
+      <p class="mirror-kicker">VEILCORE · MIRROR</p>
+      <h2 id="mirror-menu-title">Paused</h2>
+      <div class="mirror-menu-actions">
+        <button type="button" data-mirror-resume>RESUME</button>
+        <button type="button" data-mirror-quit>RETURN TO MENU</button>
+      </div>
+      <span class="mirror-menu-note">Esc or Resume to carry on</span>
+    </div>
+  </div>
+
+  <aside class="mirror-about">
     <p class="mirror-kicker">VEILCORE · MIRROR</p>
     <h1>Only the Body</h1>
-    <p class="mirror-sub">
-      No runes, no bow, no rival, no clock. One duelist that copies your arm,
-      your wrist and your fingers, and a panel of the numbers it is copying.
-      This is where the tracking gets made to look like you; the duel only ever
-      reads the same modules.
-    </p>
-    <button type="button" data-mirror-enter>OPEN THE MIRROR</button>
+    <p class="mirror-about-body">No runes, no bow, no rival, no clock. One duelist copying your arm, your wrist and your fingers, beside a panel of the numbers it is copying.</p>
     <p class="mirror-error" data-mirror-error hidden></p>
-  </section>
+  </aside>
 
   <script type="importmap">
     {

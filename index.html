@@ -104,6 +104,7 @@
     .arena-start h1 em { color: var(--gold); font-style: normal; margin-left: .36em; }
     .arena-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-top: 34px; }
     .arena-start button,
+    .arena-start a.arena-button,
     .arena-pause-actions button {
       position: relative; overflow: hidden; width: 218px; padding: 15px 18px;
       border: 1px solid rgba(255,217,138,.72); border-radius: 2px;
@@ -111,26 +112,51 @@
       font: 500 11px/1 "IBM Plex Mono", monospace; letter-spacing: .22em;
       text-align: left; transition: color .2s ease, border-color .2s ease, background .2s ease, transform .2s ease;
     }
+    .arena-start a.arena-button { display: block; text-decoration: none; box-sizing: border-box; }
     .arena-start button::before,
+    .arena-start a.arena-button::before,
     .arena-pause-actions button::before {
       content: ""; position: absolute; inset: 0; z-index: -1;
       background: var(--gold); transform: translateX(-102%); transition: transform .28s cubic-bezier(.2,.7,.2,1);
     }
     .arena-start button::after,
+    .arena-start a.arena-button::after,
     .arena-pause-actions button::after { content: "→"; float: right; font-size: 16px; line-height: 8px; }
     .arena-start button:hover,
+    .arena-start a.arena-button:hover,
     .arena-pause-actions button:hover { color: #15100a; border-color: var(--gold); transform: translateY(-2px); }
     .arena-start button:hover::before,
+    .arena-start a.arena-button:hover::before,
     .arena-pause-actions button:hover::before { transform: translateX(0); }
     .arena-start button:disabled { cursor: wait; opacity: .48; transform: none; }
     .arena-start button:disabled::before { transform: translateX(-102%); }
     .arena-start button.arena-secondary,
+    .arena-start a.arena-button.arena-secondary,
     .arena-pause-actions button.arena-secondary { border-color: rgba(155,135,255,.68); }
     .arena-start button.arena-secondary::before,
+    .arena-start a.arena-button.arena-secondary::before,
     .arena-pause-actions button.arena-secondary::before { background: var(--violet); }
     /* The pause screen. Sits above the canvas but below nothing else, and it is
        DOM rather than canvas because it has to be clickable -- the in-game HUD
        stays where AGENTS.md says it lives. */
+    /* The side doors. Anchors, not buttons with a click handler: they navigate,
+       which means middle-click and open-in-new-tab work and nothing depends on
+       the module having loaded. Deliberately quiet -- the duel is the reason
+       this page exists and these two are rooms off it. */
+    .arena-rooms {
+      display: flex; flex-wrap: wrap; gap: 24px; align-items: baseline;
+      margin-top: 24px; padding-top: 18px;
+      border-top: 1px solid rgba(255,255,255,.07);
+    }
+    .arena-rooms a {
+      color: #8290a7; text-decoration: none;
+      font: 500 9px/1.2 "IBM Plex Mono", monospace;
+      letter-spacing: .2em; text-transform: uppercase;
+      transition: color .2s ease;
+    }
+    .arena-rooms a::before { content: "→"; margin-right: 9px; color: var(--violet); }
+    .arena-rooms a:hover, .arena-rooms a:focus-visible { color: var(--paper); }
+    .arena-rooms a span { color: #5d6b86; letter-spacing: .12em; text-transform: none; }
     .arena-pause {
       position: fixed; inset: 0; z-index: 4;
       display: grid; place-items: center;
@@ -264,6 +290,22 @@
   <p class="arena-status" data-arena-status></p>
   <p class="arena-error" data-arena-error hidden></p>
 
+  <div class="arena-pause" data-arena-multiplayer hidden>
+    <div class="arena-pause-box" role="dialog" aria-modal="true" aria-labelledby="arena-multiplayer-title">
+      <button class="arena-pause-close" type="button" data-arena-multiplayer-close aria-label="Close">&times;</button>
+      <p class="arena-mode">Veilcore duel</p>
+      <h2 id="arena-multiplayer-title">TWO PLAYERS</h2>
+      <div class="arena-pause-actions">
+        <button class="arena-secondary" type="button" data-arena-host>CREATE ROOM</button>
+        <form class="arena-room-join" data-arena-join>
+          <input data-arena-room-code aria-label="Room code" maxlength="4" autocomplete="off" placeholder="CODE">
+          <button class="arena-secondary" type="submit">JOIN ROOM</button>
+        </form>
+      </div>
+      <span class="arena-pause-note arena-room-status" data-arena-room-status>Solo or two-player · 05:00</span>
+    </div>
+  </div>
+
   <div class="arena-pause" data-arena-room-panel hidden>
     <div class="arena-pause-box" role="dialog" aria-modal="true" aria-labelledby="arena-room-panel-title">
       <button class="arena-pause-close" type="button" data-arena-room-panel-close aria-label="Close">&times;</button>
@@ -308,14 +350,18 @@
       <p class="arena-mode">Veilcore duel</p>
       <h1><span>Enter the</span><em>Veil</em></h1>
       <div class="arena-actions">
-        <button type="button" data-arena-enter>SOLO DUEL</button>
-        <button class="arena-secondary" type="button" data-arena-host>CREATE ROOM</button>
-        <form class="arena-room-join" data-arena-join>
-          <input data-arena-room-code aria-label="Room code" maxlength="4" autocomplete="off" placeholder="CODE">
-          <button class="arena-secondary" type="submit">JOIN ROOM</button>
-        </form>
-        <span class="arena-action-note arena-room-status" data-arena-room-status><b>Solo or two-player · 05:00</b>Webcam spellcasting</span>
+        <button type="button" data-arena-enter>SOLO MODE</button>
+        <button class="arena-secondary" type="button" data-arena-multiplayer-open>MULTIPLAYER</button>
+        <!-- A link wearing the buttons' clothes. It navigates, so middle-click
+             and open-in-new-tab work and it does not need arena.js to have
+             booted -- the two rooms off this page stay reachable even if the
+             duel itself fails to start. -->
+        <a class="arena-button arena-secondary" href="practice.html">PRACTICE MODE</a>
+        <span class="arena-action-note" data-arena-menu-note><b>Solo or two-player · 05:00</b>Webcam spellcasting</span>
       </div>
+      <nav class="arena-rooms" aria-label="Other rooms">
+        <a href="mirror.html">The mirror <span>— only the body, no duel</span></a>
+      </nav>
     </main>
 
     <footer class="arena-foot">

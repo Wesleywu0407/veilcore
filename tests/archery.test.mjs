@@ -113,6 +113,59 @@ test("closing on the string nocks, opening it looses", () => {
   assert.equal(shot.phase, "idle", "back to empty hands after the shot");
 });
 
+test("a twitch is not a shot, unless the floor is lowered", () => {
+  // Slack: the wrists never leave DRAW_MIN, so the draw stays at zero.
+  const slack = () => {
+    const bow = createBowState();
+    let t = 1000;
+    bow.update(pose(BOW.DRAW_MIN, CLOSED), t += 16);
+    bow.update(pose(BOW.DRAW_MIN, OPEN), t += 16);
+    return bow.update(pose(BOW.DRAW_MIN, OPEN), t += BOW.RELEASE_HOLD_MS);
+  };
+  assert.equal(slack().event, null, "the duel refuses a shot that was never drawn");
+
+  const bow = createBowState({ minLooseDraw: 0 });
+  let t = 1000;
+  bow.update(pose(BOW.DRAW_MIN, CLOSED), t += 16);
+  bow.update(pose(BOW.DRAW_MIN, OPEN), t += 16);
+  const shot = bow.update(pose(BOW.DRAW_MIN, OPEN), t += BOW.RELEASE_HOLD_MS);
+  assert.ok(shot.event, "the range fires whatever the hands were doing");
+  assert.equal(shot.event.type, "loosed");
+  assert.equal(shot.event.power, 0, "and reports the draw it actually had");
+});
+
+test("the string can be required to have been held", () => {
+  const HOLD = 1000;
+  const draw = (bow, ms) => {
+    let t = 1000;
+    bow.update(pose(BOW.DRAW_FULL, CLOSED), t += 16);          // nock
+    bow.update(pose(BOW.DRAW_FULL, CLOSED), t += ms);          // hold this long
+    bow.update(pose(BOW.DRAW_FULL, OPEN), t += 16);            // open
+    return bow.update(pose(BOW.DRAW_FULL, OPEN), t += BOW.RELEASE_HOLD_MS);
+  };
+
+  // Let go early and the arrow is put away, exactly as collapsing the draw does.
+  const early = draw(createBowState({ minHoldMs: HOLD }), 200);
+  assert.equal(early.event, null, "released before the hold was up");
+  assert.equal(early.phase, "idle", "and the arrow is put away, not kept");
+
+  const late = draw(createBowState({ minHoldMs: HOLD }), HOLD + 50);
+  assert.ok(late.event, "held long enough");
+  assert.equal(late.event.type, "loosed");
+
+  // The duel asks for no hold, so the same early release still fires there.
+  assert.ok(draw(createBowState(), 200).event, "default is no hold at all");
+});
+
+test("the hold is reported while it runs", () => {
+  const bow = createBowState({ minHoldMs: 1000 });
+  let t = 1000;
+  assert.equal(bow.update(pose(2.0, OPEN), t).held, 0, "nothing held before a nock");
+  bow.update(pose(BOW.DRAW_FULL, CLOSED), t += 16);
+  assert.equal(bow.update(pose(BOW.DRAW_FULL, CLOSED), t += 400).held, 400);
+  assert.equal(bow.update(pose(BOW.DRAW_FULL, CLOSED), t += 400).held, 800);
+});
+
 test("a single dropped frame is not a loose", () => {
   const bow = createBowState();
   let t = 1000;

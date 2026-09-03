@@ -103,19 +103,34 @@ export function readBow(hands) {
 
 const PHASE = { IDLE: "idle", NOCKED: "nocked" };
 
-export function createBowState() {
+/**
+ * @param minLooseDraw how far the bow must have been drawn for the release to
+ *   count as a shot. Defaults to BOW.MIN_LOOSE_DRAW, which is what the duel
+ *   wants: there, a twitch of the fingers should not cost you an arrow and 20
+ *   mana. The practice range passes 0, because a range exists to make the
+ *   release itself repeatable and refusing to fire teaches nothing about the
+ *   gesture -- a shot that flies feebly still tells you the hand was read.
+ * @param minHoldMs how long the string has to have been held before letting go
+ *   counts as a shot. Zero means any release fires, which is what the duel
+ *   wants: there the draw itself is the commitment. A range can ask for more,
+ *   so that shooting is a held pose rather than something a hand can flap out.
+ *   Opening early does not fire -- it puts the arrow away, the same as
+ *   collapsing the draw does.
+ */
+export function createBowState({ minLooseDraw = BOW.MIN_LOOSE_DRAW, minHoldMs = 0 } = {}) {
   let phase = PHASE.IDLE;
   let openSince = 0;
+  let nockedAt = 0;
   let peak = 0;
 
   return {
     get phase() { return phase; },
-    reset() { phase = PHASE.IDLE; openSince = 0; peak = 0; },
+    reset() { phase = PHASE.IDLE; openSince = 0; nockedAt = 0; peak = 0; },
 
     /**
      * @param hands frame.hands
      * @param now   performance.now()
-     * @returns {{phase, draw, spans, aim, angle, peak, event}}
+     * @returns {{phase, draw, spans, aim, angle, peak, held, event}}
      *          event is null, or { type: 'loosed', power, aim } once.
      */
     update(hands, now) {
@@ -124,12 +139,12 @@ export function createBowState() {
         phase = PHASE.IDLE;
         openSince = 0;
         peak = 0;
-        return { phase, draw: 0, spans: 0, aim: null, angle: 0, peak: 0, event: null };
+        return { phase, draw: 0, spans: 0, aim: null, angle: 0, peak: 0, held: 0, event: null };
       }
 
       let event = null;
       if (phase === PHASE.IDLE) {
-        if (read.stringClosed) { phase = PHASE.NOCKED; peak = 0; openSince = 0; }
+        if (read.stringClosed) { phase = PHASE.NOCKED; peak = 0; openSince = 0; nockedAt = now; }
       } else {
         peak = Math.max(peak, read.draw);
         if (read.stringOpen) {
@@ -137,11 +152,15 @@ export function createBowState() {
           // the thumb would otherwise read as a loose.
           if (!openSince) openSince = now;
           else if (now - openSince >= BOW.RELEASE_HOLD_MS) {
-            if (peak >= BOW.MIN_LOOSE_DRAW) {
+            // Measured from the nock, not from the release: what is being asked
+            // for is that the string was HELD, and the hold is the whole time
+            // the fingers were closed on it.
+            if (peak >= minLooseDraw && now - nockedAt >= minHoldMs) {
               event = { type: "loosed", power: peak, aim: read.aim, angle: read.angle };
             }
             phase = PHASE.IDLE;
             openSince = 0;
+            nockedAt = 0;
             peak = 0;
           }
         } else {
@@ -152,6 +171,9 @@ export function createBowState() {
       return {
         phase, draw: read.draw, spans: read.spans,
         aim: read.aim, angle: read.angle, peak, event,
+        // How long the string has been held, so a caller can show the wait
+        // rather than leaving the player wondering why the arrow stayed put.
+        held: phase === PHASE.NOCKED ? now - nockedAt : 0,
         stringSide: read.stringSide,
         // Handed out so consumers point the reticle with the same hand this
         // file picked. Deciding it twice is how the panel ends up disagreeing

@@ -92,9 +92,11 @@ const overlay = document.querySelector('[data-mirror-overlay]');
 const video = document.querySelector('[data-mirror-video]');
 const scan = document.querySelector('[data-mirror-scan]');
 const scanCtx = scan.getContext('2d');
-const startPanel = document.querySelector('[data-mirror-start]');
-const startButton = document.querySelector('[data-mirror-enter]');
 const errorLine = document.querySelector('[data-mirror-error]');
+const menuPanel = document.querySelector('[data-mirror-menu]');
+const menuResume = document.querySelector('[data-mirror-resume]');
+const menuQuit = document.querySelector('[data-mirror-quit]');
+const menuClose = document.querySelector('[data-mirror-menu-close]');
 const ctx = overlay.getContext('2d');
 
 const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true });
@@ -366,6 +368,10 @@ function drawReadout(frame) {
     ctx.fillStyle = RED;
     ctx.fillText(status, 24, h - 28);
   }
+
+  ctx.fillStyle = '#5d6b86';
+  ctx.fillText('ESC  menu      V  view      C  camera      B  body      R  record      L  level',
+    24, h - 12);
 }
 
 // ─── Loop ─────────────────────────────────────────────────────────────────────
@@ -404,6 +410,12 @@ function loop() {
   if (!running) return;
   requestAnimationFrame(loop);
   const now = performance.now();
+  if (menuOpen) {
+    // The pose freezes where it was; the panel is drawn over it by the DOM.
+    last = now;
+    renderer.render(scene, camera);
+    return;
+  }
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
 
@@ -584,8 +596,41 @@ try {
   if (Number.isFinite(stored) && stored !== 0) setHeadLevel(stored);
 } catch { /* private window, or storage refused: level again this session */ }
 
+// ─── The pause panel ─────────────────────────────────────────────────────────
+//
+// Escape opens it; Escape again closes it. Leaving takes a deliberate click,
+// because navigating away on a single keypress is not something a page should
+// do while you are stood back from the screen with both hands up -- and Escape
+// is the key browsers have trained everyone to hit to get out of something
+// smaller than the whole page.
+let menuOpen = false;
+
+function openMenu() {
+  if (!running || menuOpen) return;
+  menuOpen = true;
+  if (menuPanel) menuPanel.hidden = false;
+  menuResume?.focus();
+}
+
+function closeMenu() {
+  if (!menuOpen) return;
+  menuOpen = false;
+  if (menuPanel) menuPanel.hidden = true;
+  last = performance.now();
+}
+
+menuResume?.addEventListener('click', closeMenu);
+menuClose?.addEventListener('click', closeMenu);
+menuQuit?.addEventListener('click', () => { location.href = 'index.html'; });
+menuPanel?.addEventListener('click', event => { if (event.target === menuPanel) closeMenu(); });
+
 addEventListener('keydown', event => {
   if (event.repeat) return;
+  if (event.code === 'Escape') {
+    if (menuOpen) closeMenu();
+    else openMenu();
+    return;
+  }
   if (event.code === 'KeyV') firstPerson = !firstPerson;
   if (event.code === 'KeyR' && !recording) startRecording();
   if (event.code === 'KeyC') showCamera = !showCamera;
@@ -622,8 +667,22 @@ addEventListener('mousemove', event => {
   orbitPitch = Math.max(-0.7, Math.min(0.6, orbitPitch - event.movementY * 0.002));
 });
 
-startButton.addEventListener('click', async () => {
-  startButton.disabled = true;
+// ── Straight in ──
+//
+// No cover page to press through. The one thing it did besides carry a
+// paragraph was provide the USER GESTURE getUserMedia prefers, and that cost
+// falls on a first visit only: an origin already granted the camera is granted
+// it again with no prompt. A refusal is not silent -- the corner says why, and
+// the mirror keeps running with nothing to copy, which is a state it was always
+// built to survive.
+//
+// The scene starts FIRST and the camera is asked for after, so a slow or denied
+// permission never holds up the render.
+running = true;
+last = performance.now();
+loop();
+
+(async () => {
   errorLine.hidden = true;
   try {
     await initTracker(video, stage => { status = stage; });
@@ -634,11 +693,7 @@ startButton.addEventListener('click', async () => {
     errorLine.hidden = false;
     status = 'no camera';
   }
-  startPanel.hidden = true;
-  running = true;
-  last = performance.now();
-  loop();
-});
+})();
 
 addEventListener('beforeunload', () => {
   running = false;

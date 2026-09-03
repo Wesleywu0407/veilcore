@@ -67,6 +67,15 @@ let bodyWorker = null;
 let bodyLoaded = false;
 let running = false;
 let lastVideoTime = -1;
+// Bumped by every initTracker(). Work already in flight when a new session
+// starts carries the old number and drops itself, so a decode begun against the
+// previous camera can never be posted to the new worker.
+let session = 0;
+// True between the first await in initTracker and its last. Startup has three
+// awaits -- camera permission, video.play(), and a worker loading a model -- so
+// there is a window of seconds during which a second call would interleave with
+// the first and clobber half its state on the way past.
+let starting = false;
 let detections = 0;
 // One frame in flight at a time.
 //
@@ -395,6 +404,37 @@ function cameraBlockedMessage() {
  * minutes. `onStage` reports each step so a hang is attributable.
  */
 export async function initTracker(videoEl, onStage = () => {}) {
+  // Mashing the retry key must not start two of these. Thrown rather than
+  // quietly ignored: the callers set `tracking = true` on a successful return,
+  // so a silent no-op would leave a page believing it had a camera.
+  if (starting) throw new Error("the camera is already starting — give it a moment");
+  starting = true;
+  try {
+    return await start(videoEl, onStage);
+  } finally {
+    starting = false;
+  }
+}
+
+async function start(videoEl, onStage) {
+  // ── Coming back in here is a RETRY, not a second tracker ──
+  //
+  // Nothing used to stop this running twice, and everything it does is a fresh
+  // allocation: a new camera stream over the top of a live one, whose tracks
+  // were then never stopped; a new worker, leaving the old one running and
+  // still writing into `frame`; and `running = true` followed by detectLoop(),
+  // which started a SECOND requestAnimationFrame chain while the first was
+  // still going. Two loops then shared one `busy` gate and double-posted frames
+  // to whichever worker had most recently won the variable.
+  //
+  // That is what H did to the practice range. The invariant -- one camera, one
+  // worker, one loop -- belongs here, where the state is, and not in each of
+  // the two pages that call this.
+  disposeTracker();
+  session++;
+  lastVideoTime = -1;
+  detections = 0;
+
   video = videoEl;
   tipX.reset();
   tipY.reset();
@@ -475,8 +515,11 @@ export async function initTracker(videoEl, onStage = () => {}) {
  * `frame` and nothing else. Deliberately does no game logic — the moment
  * detection starts deciding things, the two loops are coupled again.
  */
-function detectLoop() {
-  if (!running) return;
+function detectLoop(mine = session) {
+  // A chain outlives the session that started it by up to one frame. Checking
+  // the token rather than just `running` is what stops a restarted tracker
+  // ending up with two.
+  if (!running || mine !== session) return;
 
   // Two gates. `currentTime` because the camera delivers fewer frames than the
   // display refreshes and there is nothing new to look at otherwise; `busy`
@@ -495,7 +538,7 @@ function detectLoop() {
     const decodeStart = performance.now();
     createImageBitmap(video).then(bitmap => {
       frame.decodeMs = frame.decodeMs * 0.8 + (performance.now() - decodeStart) * 0.2;
-      if (!running) { bitmap.close(); return; }
+      if (!running || mine !== session) { bitmap.close(); return; }
       handWorker.postMessage({ type: "frame", bitmap, timestamp }, [bitmap]);
       // The body gets its own copy on its own cadence. A transferred bitmap
       // belongs to whoever received it, so this is a second decode rather than
@@ -504,7 +547,7 @@ function detectLoop() {
         bodyBusy = true;
         createImageBitmap(video)
           .then(copy => {
-            if (!running || !bodyWorker) { copy.close(); return; }
+            if (!running || mine !== session || !bodyWorker) { copy.close(); return; }
             bodyWorker.postMessage({ type: "frame", bitmap: copy, timestamp }, [copy]);
           })
           .catch(() => { bodyBusy = false; });
@@ -516,7 +559,7 @@ function detectLoop() {
     });
   }
 
-  requestAnimationFrame(detectLoop);
+  requestAnimationFrame(() => detectLoop(mine));
 }
 
 function applyResult(result) {

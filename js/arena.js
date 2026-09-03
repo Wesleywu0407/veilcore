@@ -46,6 +46,9 @@ const joinForm = document.querySelector('[data-arena-join]');
 const joinButton = joinForm?.querySelector('button');
 const roomCodeInput = document.querySelector('[data-arena-room-code]');
 const roomStatusLine = document.querySelector('[data-arena-room-status]');
+const multiplayerPanel = document.querySelector('[data-arena-multiplayer]');
+const multiplayerOpenButton = document.querySelector('[data-arena-multiplayer-open]');
+const multiplayerCloseButton = document.querySelector('[data-arena-multiplayer-close]');
 const roomPanel = document.querySelector('[data-arena-room-panel]');
 const roomPanelCode = document.querySelector('[data-arena-room-panel-code]');
 const roomPanelMessage = document.querySelector('[data-arena-room-panel-message]');
@@ -813,7 +816,11 @@ addEventListener('keydown', event => {
   if (event.code === 'Escape') {
     // Reaches here only when no pointer lock is held; with one, the browser
     // eats this keydown and pointerlockchange opens the menu instead.
+    //
+    // Innermost first: whichever panel is actually on top is the one Escape is
+    // being aimed at.
     if (roomPanelOpen) closeTheRoom();
+    else if (multiplayerOpen) closeMultiplayer();
     else if (menuOpen) closeMenu();
     else openMenu();
     return;
@@ -858,6 +865,39 @@ addEventListener('keydown', event => {
 });
 addEventListener('keyup', event => keys.delete(event.code));
 
+// ─── Choosing two players ────────────────────────────────────────────────────
+//
+// The gate offers three doors and no more: solo, multiplayer, practice. Hosting
+// and joining used to sit on it as two more controls plus a text field, which
+// made four things to read before the duel could be started at all -- and three
+// of them were about a mode most people arriving here are not in.
+//
+// They live behind MULTIPLAYER now. Nothing about how a room is made changed;
+// the same two handlers are bound to the same two elements, which simply moved.
+let multiplayerOpen = false;
+
+function openMultiplayer() {
+  if (multiplayerOpen) return;
+  multiplayerOpen = true;
+  if (multiplayerPanel) multiplayerPanel.hidden = false;
+  void refreshRoomServerStatus();
+  hostButton?.focus();
+}
+
+function closeMultiplayer() {
+  if (!multiplayerOpen) return;
+  multiplayerOpen = false;
+  if (multiplayerPanel) multiplayerPanel.hidden = true;
+}
+
+multiplayerOpenButton?.addEventListener('click', openMultiplayer);
+multiplayerCloseButton?.addEventListener('click', closeMultiplayer);
+multiplayerPanel?.addEventListener('click', event => {
+  // The backdrop only. A room half-typed into the code box should survive a
+  // click that lands inside the box.
+  if (event.target === multiplayerPanel) closeMultiplayer();
+});
+
 // ─── The waiting room ────────────────────────────────────────────────────────
 //
 // A four-character code you have to read off the screen and type into a chat
@@ -871,6 +911,7 @@ addEventListener('keyup', event => keys.delete(event.code));
 let roomPanelOpen = false;
 
 function showRoomPanel(code) {
+  closeMultiplayer();
   roomPanelOpen = true;
   if (roomPanelCode) roomPanelCode.textContent = code;
   if (roomPanelMessage) roomPanelMessage.textContent = 'Waiting for your friend to join…';
@@ -886,6 +927,9 @@ function hideRoomPanel() {
 
 function closeTheRoom() {
   hideRoomPanel();
+  // Back one level rather than all the way out. Abandoning a room usually means
+  // trying the other half of the same screen -- you meant to join, not host.
+  openMultiplayer();
   roomClient.close();
   onlineDuel = false;
   peerConnected = false;
