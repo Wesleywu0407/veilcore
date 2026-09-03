@@ -1513,12 +1513,25 @@ function updateHand(now) {
   // makes. See js/spell-room/body-map.js.
   const runeHand = frame.hands?.find(h => (h.bodySide ?? h.side) === 'right')
     ?? (frame.hands?.length === 1 ? frame.hands[0] : null);
+  // ── The arm is YOURS, not the rune system's ──
+  //
+  // This was gated on `gate` -- on isPinching. So the duelist's arm followed
+  // you only while you held a pinch and dropped to rest the instant you let go:
+  // the body was on loan from the spell, and every gesture that was not a cast
+  // was performed by a statue. In the mirror the arm has always followed
+  // unconditionally, and that difference is most of why one felt like you and
+  // the other did not.
+  //
+  // The pinch still decides whether a RUNE is being drawn. It just no longer
+  // decides whether you have an arm.
   playerAvatar.reach(
-    gate && frame.tracked && runeHand
+    frame.tracked && runeHand
       ? body.handTarget('right', anchorOf(runeHand), frame.pose)
       : null,
     cast.charge,
-    !ringfallCharging,
+    // The spark is the cast's, so it stays behind the gate -- an arm that is
+    // merely being moved should not glow as though it were charging.
+    gate && !ringfallCharging,
     body.elbowTarget('right', frame.pose?.right),
   );
   drivePalms(frame);
