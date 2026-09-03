@@ -82,6 +82,8 @@ const _twVec = new THREE.Vector3();
 const _twWorld = new THREE.Quaternion();
 const _twParent = new THREE.Quaternion();
 const _girdleTarget = new THREE.Vector3();
+const _girdleWant = new THREE.Quaternion();
+const _girdleSpin = new THREE.Quaternion();
 const _twFore = new THREE.Vector3();
 const _twHand = new THREE.Vector3();
 
@@ -434,6 +436,10 @@ function collectGirdle(model) {
       // the left clavicle and drops the right one.
       sign: side === 'Left' ? 1 : -1,
       live: 0,
+      // Our own rotation, carried across frames -- the same shape the palm rig
+      // uses, and for the same reason. See the handover note in update().
+      pose: new THREE.Quaternion(),
+      holding: false,
     };
   }
   return Object.keys(rig).length ? rig : null;
@@ -1376,14 +1382,35 @@ export function createDuelist(scene, {
           left: leftReachWeight > 0.01
             ? girdleLift(root.worldToLocal(_girdleTarget.copy(lastLeftReach)), leftShoulderLocal, armReach) : 0,
         };
+        const ease = Math.min(1, dt * SHOULDER_TRACK);
         for (const side of ['left', 'right']) {
           const part = girdle[side];
           if (!part) continue;
           const to = wanted[side];
-          if (to === 0 && Math.abs(part.live) < 1e-4) { part.live = 0; continue; }
-          part.live += (to - part.live) * Math.min(1, dt * SHOULDER_TRACK);
-          part.bone.quaternion.copy(part.rest);
-          part.bone.rotateOnAxis(part.axis, part.live * part.sign);
+          if (to === 0 && Math.abs(part.live) < 1e-4) {
+            part.live = 0;
+            part.holding = false;      // give the bone back to the clip
+            continue;
+          }
+          // ── Take the bone over from where it IS, not from bind ──
+          //
+          // mixer.update() has already written this clavicle a few hundred
+          // lines up: the duel's idle animates it. Copying `rest` on the first
+          // frame of a reach therefore jumps it from the clip's pose to the
+          // bind pose in one frame, and a shoulder popping at the start of
+          // every cast is worse than a shoulder that never moved.
+          //
+          // The mirror could never show this -- it loads no clips, so there the
+          // bone is already sitting at rest and the copy is a no-op.
+          if (!part.holding) {
+            part.pose.copy(part.bone.quaternion);
+            part.holding = true;
+          }
+          part.live += (to - part.live) * ease;
+          _girdleWant.copy(part.rest)
+            .multiply(_girdleSpin.setFromAxisAngle(part.axis, part.live * part.sign));
+          part.pose.slerp(_girdleWant, ease);
+          part.bone.quaternion.copy(part.pose);
         }
       }
 
@@ -1470,6 +1497,12 @@ export function createDuelist(scene, {
       // eases home first, and only lets go once it has arrived.
       const headActive = headTarget !== null
         || Math.abs(headLive) > 1e-4 || Math.abs(headPitchLive) > 1e-4;
+      // NOTE: this writes `rest` on its first active frame, the way the girdle
+      // used to. It cannot pop today because nothing in the duel calls look()
+      // and the mirror loads no clips -- but that is a property of the CALLERS,
+      // not of this block. Wiring head tracking into the duel means giving this
+      // the same handover the girdle has above: 18 degrees, measured, is what
+      // that clip holds a bone away from bind.
       if (headRig && headActive) {
         // Ease toward the target, and back to zero when it is dropped, so a
         // head that loses tracking returns rather than staying wherever the
