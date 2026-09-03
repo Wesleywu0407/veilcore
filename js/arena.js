@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { buildArena, buildEnvironment } from './arena/scene.js';
 import { DUEL } from './arena/config.js';
 import { createDuelist } from './arena/duelist.js';
-import { FINGERS } from './spell-room/fingers.js';
+import { FINGERS, FINGER_CHAINS } from './spell-room/fingers.js';
 import { createBodyMap, anchorOf, ARM_IN_SPANS } from './spell-room/body-map.js';
 import { drawFace } from './spell-room/draw-face.js';
 import { createOpponentController } from './arena/opponent.js';
@@ -1763,6 +1763,15 @@ const HAND_CONNECTIONS = [
   [13, 17], [17, 18], [18, 19], [19, 20], [17, 0],
 ];
 
+// The five tips, in their own colour, taken off the ends of the finger chains
+// rather than written out again as numbers. They are the points every gesture
+// in this game is read off -- a rune is the index tip's path, a fist is where
+// the other four have gone -- so when one of them wanders off the finger the
+// hand still looks fine and nothing casts. Green so that is visible at a glance
+// on a skeleton that is otherwise all one colour.
+const FINGERTIPS = new Set(Object.values(FINGER_CHAINS).map(chain => chain.at(-1)));
+const TIP = '#57e08a';
+
 function drawSelfie(frame) {
   if (!tracking || !video?.classList.contains('selfie-live')) return;
   const rect = video.getBoundingClientRect();
@@ -1797,7 +1806,17 @@ function drawSelfie(frame) {
     ctx.stroke();
 
     ctx.fillStyle = colour;
-    for (const point of landmarks) {
+    for (const [index, point] of landmarks.entries()) {
+      if (FINGERTIPS.has(index)) continue;
+      ctx.beginPath();
+      ctx.arc(x(point), y(point), 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = TIP;
+    for (const index of FINGERTIPS) {
+      const point = landmarks[index];
+      if (!point) continue;
       ctx.beginPath();
       ctx.arc(x(point), y(point), 1.8, 0, Math.PI * 2);
       ctx.fill();
