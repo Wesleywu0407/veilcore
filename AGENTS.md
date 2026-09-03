@@ -60,6 +60,7 @@ npm run runes  # how far apart the rune shapes sit
 npm run arm    # replay a mirror recording and check the learned arm length
 npm run tip    # what the wand tip's filter costs in lag, stillness and recognition
 npm run sign   # how often the off hand's count fires on a gesture in transit
+npm run jitter # from a mirror recording: which point on your hand is shaking
 npm run assets # triangles, textures, download size and VRAM per GLB
 ```
 

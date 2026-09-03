@@ -179,6 +179,12 @@ const candidates = [
   ['beta 6', { ...TIP_FILTER, beta: 6 }],
   ['beta 12', { ...TIP_FILTER, beta: 12 }],
   ['beta 24', { ...TIP_FILTER, beta: 24 }],
+  // The arm is calm on screen and the cursor is not, and these are the numbers
+  // the arm is calm WITH. ANCHOR_FILTER, from tracker.js.
+  ['the ARM\'s settings', { minCutoff: 1.5, beta: 6, dCutoff: 1.0, deadband: 0.005 }],
+  ['arm band, beta 1', { minCutoff: 1.5, beta: 1, dCutoff: 1.0, deadband: 0.005 }],
+  ['arm band, min 1.2', { minCutoff: 1.2, beta: 1, dCutoff: 1.0, deadband: 0.005 }],
+  ['deadband 0.008', { ...TIP_FILTER, deadband: 0.008 }],
   ['no deadband', { ...TIP_FILTER, deadband: 0 }],
   ['no filter at all', { minCutoff: 1e6, beta: 0, dCutoff: 1e6, deadband: 0 }],
 ];
