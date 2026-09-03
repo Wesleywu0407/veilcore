@@ -33,6 +33,7 @@ export const POSE = {
   // The model's own left/right again, and again not to be believed. Read as an
   // unordered pair and sorted by x, the same way the arms are.
   EARS: [7, 8],
+  EYES: [2, 5],
 };
 
 // Ratio to radians. A ratio of 0.5 is a head turned about halfway, and 1.55
@@ -278,15 +279,32 @@ export function readHead(landmarks) {
   // would turn the character's head back. In practice the far ear also stops
   // being visible around there and this returns null anyway, but a fold-back
   // that is only prevented by luck is not prevented.
-  // Nose above the ear line, in ear spans. Signed: positive is looking up.
-  const lift = ((leftEar.y + rightEar.y) / 2 - nose.y) / span;
+  // ── Pitch is read off a short lever, so it is read off as many points as
+  //    possible ──
+  //
+  // `lift` is a height divided by the ear span, and that span is about 0.06 of
+  // the frame. Every pixel of noise on the points below therefore arrives
+  // magnified roughly seventeen times -- which is why pitch stuttered where yaw
+  // did not, on the very same landmarks. Yaw is a ratio of two distances and
+  // has no such lever in it.
+  //
+  // The ear line is the steady half and stays as the reference. The moving half
+  // is averaged over the nose AND both eyes where they are visible, since all
+  // three rise and fall together when a head tips, and three noisy points
+  // average to about 1.7x less noise than one.
+  const eyes = POSE.EYES.map(i => point(landmarks[i])).filter(Boolean);
+  const front = eyes.length === 2
+    ? (nose.y + eyes[0].y + eyes[1].y) / 3
+    : nose.y;
+  const lift = ((leftEar.y + rightEar.y) / 2 - front) / span;
 
   const axisX = rightEar.x - leftEar.x;
   const axisY = rightEar.y - leftEar.y;
   const along =
     ((nose.x - leftEar.x) * axisX + (nose.y - leftEar.y) * axisY) / (span * span);
-  if (along <= 0) return { yaw: HEAD_LIMIT, lift };   // nose past the left ear
-  if (along >= 1) return { yaw: -HEAD_LIMIT, lift };
+  const points = { nose, leftEar, rightEar, eyes };
+  if (along <= 0) return { yaw: HEAD_LIMIT, lift, points };   // nose past the left ear
+  if (along >= 1) return { yaw: -HEAD_LIMIT, lift, points };
 
   const toLeft = Math.hypot(nose.x - leftEar.x, nose.y - leftEar.y);
   const toRight = Math.hypot(nose.x - rightEar.x, nose.y - rightEar.y);
@@ -295,7 +313,11 @@ export function readHead(landmarks) {
 
   // Nose nearer the left ear means the head has turned to the player's left.
   const turn = (toRight - toLeft) / total;
-  return { yaw: Math.max(-HEAD_LIMIT, Math.min(HEAD_LIMIT, turn * HEAD_GAIN)), lift };
+  return {
+    yaw: Math.max(-HEAD_LIMIT, Math.min(HEAD_LIMIT, turn * HEAD_GAIN)),
+    lift,
+    points,
+  };
 }
 
 /**

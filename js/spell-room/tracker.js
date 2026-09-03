@@ -170,7 +170,20 @@ const poseFilters = new Map();
 // two degrees, which is under what anyone can hold still to anyway.
 const HEAD_FILTER = { minCutoff: 1.0, beta: 2.0, dCutoff: 1.0, deadband: 0.035 };
 const yawFilter = makeSteady(HEAD_FILTER);
-const pitchFilter = makeSteady(HEAD_FILTER);
+
+// ── Pitch is not yaw, and sharing yaw's filter is what made it judder ──
+//
+// Yaw is a ratio of two distances: bounded, and a pixel of error moves it by a
+// pixel's worth. Pitch divides a height by the ear span -- about 0.06 of the
+// frame -- so a pixel of error on the face arrives magnified around seventeen
+// times. Through a deadband sized for yaw, that noise punches straight over the
+// band, and the band then converts a smooth wobble into hold-jump-hold. That is
+// the stutter: not too little smoothing, the WRONG smoothing.
+//
+// So pitch gets a lower cutoff (it is a slow signal -- nobody nods quickly at a
+// mirror) and a wider band, sized against its own noise rather than yaw's.
+const PITCH_FILTER = { minCutoff: 0.5, beta: 1.2, dCutoff: 1.0, deadband: 0.06 };
+const pitchFilter = makeSteady(PITCH_FILTER);
 const headLevel = createHeadLevel();
 
 function steady(key, point, now) {
@@ -604,6 +617,7 @@ function applyPose(body) {
       // Raw, so a caller can offer to re-level from what it is seeing now.
       lift: read.lift,
       levelled: headLevel.ready,
+      points: read.points,
     };
   }
   if (!frame.pose) {

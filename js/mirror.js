@@ -740,6 +740,42 @@ function drawScan(frame) {
     }
   }
 
+  // ── The face, drawn, because otherwise there is no way to know ──
+  //
+  // The hands have had a skeleton on this panel from the start and the face has
+  // had nothing, so "is it even seeing my face?" was unanswerable from the
+  // screen -- which is exactly the question to be able to answer before judging
+  // anything the head does.
+  const head = frame.head;
+  if (head?.points) {
+    const { nose, leftEar, rightEar, eyes } = head.points;
+    scanCtx.strokeStyle = head.levelled ? GOLD : RED;
+    scanCtx.lineWidth = 1.5;
+    // The ear line: the reference pitch is measured against.
+    scanCtx.beginPath();
+    scanCtx.moveTo(...at(leftEar));
+    scanCtx.lineTo(...at(rightEar));
+    scanCtx.stroke();
+    // And the front of the face, which is what moves against it.
+    scanCtx.fillStyle = head.levelled ? GOLD : RED;
+    for (const p of [nose, ...(eyes ?? [])]) {
+      scanCtx.beginPath();
+      scanCtx.arc(...at(p), 2.5, 0, Math.PI * 2);
+      scanCtx.fill();
+    }
+    // Where the head is pointed, as a line off the nose -- so a turn is visible
+    // as a turn rather than as a number somewhere else on the screen.
+    const [nx, ny] = at(nose);
+    scanCtx.beginPath();
+    scanCtx.moveTo(nx, ny);
+    scanCtx.lineTo(nx + Math.sin(-head.yaw) * 26, ny - Math.sin(head.pitch) * 26);
+    scanCtx.stroke();
+  } else if (showCamera) {
+    scanCtx.fillStyle = RED;
+    scanCtx.font = '10px "IBM Plex Mono", monospace';
+    scanCtx.fillText('no face', 6, 14);
+  }
+
   const pose = frame.pose;
   if (pose) {
     scanCtx.strokeStyle = '#6f7fa8';
@@ -770,7 +806,13 @@ function drawScan(frame) {
 }
 
 // Where this face's level lives between sessions, so it is asked for once.
-const LEVEL_KEY = 'veilcore.headLevel';
+// Versioned, because a stored level only means anything against the `lift` that
+// produced it. lift used to be the nose alone and is now the nose averaged with
+// both eyes, so every level saved before that is a number about a different
+// measurement -- and a stale calibration is worse than none, since it is wrong
+// silently and the fix (press L) is not obvious to anyone who does not know it
+// went stale. Bump this whenever readHead's lift changes.
+const LEVEL_KEY = 'veilcore.headLevel.v2';
 try {
   const stored = Number(localStorage.getItem(LEVEL_KEY));
   if (Number.isFinite(stored) && stored !== 0) setHeadLevel(stored);

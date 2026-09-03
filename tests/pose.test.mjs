@@ -185,12 +185,22 @@ test('the generic latch holds anything that is not null', () => {
  *  obvious one. */
 const yawOf = lm => { const read = readHead(lm); return read === null ? null : read.yaw; };
 
-function face(turn = 0) {
+function face(turn = 0, lift = 0) {
+  // Every landmark defaults to the middle of the frame, which is nowhere near a
+  // face -- so anything readHead() consults has to be placed here deliberately.
+  // The eyes were not, once, and they dragged the pitch reference to 0.5 while
+  // reporting themselves perfectly visible. A fixture that leaves a consulted
+  // point at its filler value is not testing the thing it looks like it tests.
   const lm = new Array(33).fill(null).map(() => ({ x: 0.5, y: 0.5, z: 0, visibility: 0.9 }));
   const half = 0.06 * Math.cos(turn * Math.PI / 3);      // ears close up as it turns
-  lm[POSE.NOSE] = { x: 0.5 - turn * 0.055, y: 0.42, z: 0, visibility: 0.9 };
-  lm[POSE.EARS[0]] = { x: 0.5 - half, y: 0.40, z: 0, visibility: 0.9 };
-  lm[POSE.EARS[1]] = { x: 0.5 + half, y: 0.40, z: 0, visibility: 0.9 };
+  const at = (x, y) => ({ x, y, z: 0, visibility: 0.9 });
+  // `lift` raises the whole front of the face together, the way tipping a head
+  // back does -- nose and both eyes, not the nose on its own.
+  lm[POSE.NOSE] = at(0.5 - turn * 0.055, 0.42 - lift);
+  lm[POSE.EYES[0]] = at(0.5 - turn * 0.05 - 0.022, 0.40 - lift);
+  lm[POSE.EYES[1]] = at(0.5 - turn * 0.05 + 0.022, 0.40 - lift);
+  lm[POSE.EARS[0]] = at(0.5 - half, 0.40);
+  lm[POSE.EARS[1]] = at(0.5 + half, 0.40);
   return lm;
 }
 
@@ -256,10 +266,22 @@ test('no readable face is null, not zero', () => {
 // ── Levelling a pitch against the face it belongs to ──────────────────────────
 
 /** The same face, raised or lowered: the nose moves relative to the ear line. */
+/**
+ * A face whose whole FRONT sits `lift` ear-spans above the ear line.
+ *
+ * It moves the eyes with the nose, because readHead() averages all three: they
+ * are one rigid front, and a fixture that tips the nose alone is describing a
+ * face that cannot exist. Setting only the nose here quietly halved every
+ * number this file asserts on.
+ */
 function facing(turn, lift) {
   const lm = face(turn);
   const span = Math.abs(lm[POSE.EARS[1]].x - lm[POSE.EARS[0]].x);
-  lm[POSE.NOSE].y = (lm[POSE.EARS[0]].y + lm[POSE.EARS[1]].y) / 2 - lift * span;
+  const earMid = (lm[POSE.EARS[0]].y + lm[POSE.EARS[1]].y) / 2;
+  const front = earMid - lift * span;
+  const drop = front - lm[POSE.NOSE].y;   // move the eyes by the same amount
+  lm[POSE.NOSE].y = front;
+  for (const i of POSE.EYES) lm[i].y += drop;
   return lm;
 }
 
