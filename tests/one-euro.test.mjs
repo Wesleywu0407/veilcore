@@ -103,3 +103,44 @@ test('the band is symmetric, so a held hand does not creep one way', () => {
   const down = makeDeadband(0.01); down.filter(0.5);
   assert.ok(Math.abs((up.filter(0.56) - 0.5) + (down.filter(0.44) - 0.5)) < 1e-9);
 });
+
+// ── The band has to get out of the way ───────────────────────────────────────
+
+/** How much of a slow, steady movement survives the filter. */
+function follows(config, speed, frames = 160) {
+  const filter = makeSteady(config);
+  let first = null, last = null;
+  for (let i = 0; i < frames; i++) {
+    const t = i * STEP;
+    const out = filter.filter(0.3 + (speed * t) / 1000, t);
+    if (i === 40) first = out;
+    last = out;
+  }
+  const asked = (speed * (frames - 41) * STEP) / 1000;
+  return (last - first) / asked;      // 1.0 is perfect following
+}
+
+test('a slow deliberate movement is not eaten by the band', () => {
+  // This is the "sticky" complaint. A fixed band throws away every step
+  // smaller than itself, and a slow movement is made entirely of those -- so
+  // the hand sits still, breaks free, sits still again.
+  const kept = follows(ANCHOR, 0.08);        // a hand drifting across in ~12s
+  assert.ok(kept > 0.9, `only ${(kept * 100).toFixed(0)}% of a slow move survived`);
+});
+
+test('and a normal movement is untouched', () => {
+  assert.ok(follows(ANCHOR, 1.2) > 0.95);
+});
+
+test('while a held-still hand is still dead still', () => {
+  // The trade this is all balanced against: opening the band on movement must
+  // not reopen it on noise, or the shake comes straight back.
+  assert.ok(shake(makeSteady, ANCHOR, 0.008).filtered < HALF_A_PIXEL);
+});
+
+test('the band is what does it, not the lowpass', () => {
+  // Same signal, no band: the wobble comes back. Proof the band is load bearing
+  // rather than decoration on top of a filter that was already enough.
+  const noBand = { ...ANCHOR, deadband: 0 };
+  assert.ok(shake(makeSteady, noBand, 0.008).filtered > HALF_A_PIXEL * 4);
+});

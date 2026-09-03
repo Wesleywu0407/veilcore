@@ -55,23 +55,55 @@ export function makeDeadband(epsilon) {
   let held = null;
   return {
     reset() { held = null; },
-    filter(x) {
+    /** `eps` overrides the band for this frame -- see makeSteady's speed term. */
+    filter(x, eps = epsilon) {
       if (held === null) { held = x; return x; }
       const delta = x - held;
       const size = Math.abs(delta);
-      if (size <= epsilon) return held;
-      held += Math.sign(delta) * (size - epsilon);
+      if (size <= eps) return held;
+      held += Math.sign(delta) * (size - eps);
       return held;
     },
   };
 }
 
-/** One Euro with a deadband behind it: the pair, since neither is enough. */
+// How fast something has to move before the band is half its resting size, in
+// frame widths per second. A hand crossing the frame in two seconds is 0.5, so
+// 0.25 opens the band on anything that is deliberately moving at all.
+const BAND_OPENS_AT = 0.25;
+
+/**
+ * One Euro with a deadband behind it: the pair, since neither is enough.
+ *
+ * ── And the band has to get out of the way ──
+ *
+ * A fixed band buys stillness by throwing away every movement smaller than
+ * itself. That is right while a hand is being held still and wrong the moment
+ * it is not: a slow, deliberate movement is made of small steps, so a fixed
+ * band eats it and the hand feels STUCK, then breaks free, then sticks again.
+ * Stillness was bought with stickiness, which is a bad trade nobody asked for.
+ *
+ * So the band shrinks as the thing moves -- the same idea One Euro applies to
+ * its cutoff, applied to the band. Held still, the full band and a hand that
+ * does not shake. Moving at all, the band collapses and nothing is dropped.
+ */
 export function makeSteady({ minCutoff, beta, dCutoff, deadband }) {
   const euro = makeOneEuro({ minCutoff, beta, dCutoff });
   const band = makeDeadband(deadband);
+  let prev = null, prevT = 0, speed = 0;
   return {
-    reset() { euro.reset(); band.reset(); },
-    filter(x, t) { return band.filter(euro.filter(x, t)); },
+    reset() { euro.reset(); band.reset(); prev = null; speed = 0; },
+    filter(x, t) {
+      const smoothed = euro.filter(x, t);
+      if (prev !== null) {
+        const dt = Math.max((t - prevT) / 1000, 1e-3);
+        // The speed estimate is itself smoothed, so one fast frame does not
+        // fling the band open and one slow frame does not slam it shut.
+        speed += (Math.abs(smoothed - prev) / dt - speed) * 0.35;
+      }
+      prev = smoothed;
+      prevT = t;
+      return band.filter(smoothed, deadband / (1 + speed / BAND_OPENS_AT));
+    },
   };
 }

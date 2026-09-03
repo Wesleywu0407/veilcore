@@ -30,7 +30,7 @@ import {
 
 let trackerOn = true;
 import { fingerCurls, palmBasis, FINGERS } from './spell-room/fingers.js';
-import { shoulderSpan } from './spell-room/pose.js';
+import { shoulderSpan, createArmSpan } from './spell-room/pose.js';
 import { loadGLB } from './arena/asset-library.js';
 
 const GOLD = '#ffd98a';
@@ -226,6 +226,9 @@ const _across = { left: new THREE.Vector3(), right: new THREE.Vector3() };
 // be a constant rather than something else to track.
 const ARM_IN_SPANS = 1.55;
 
+// ...and only until the player's own has been seen. See createArmSpan().
+const armSpan = { left: createArmSpan(), right: createArmSpan() };
+
 /**
  * Where the hand goes: an offset from the player's own shoulder, in arm
  * lengths, rather than a place in the picture.
@@ -261,7 +264,12 @@ const lastAnchor = { left: null, right: null };
 
 function handTarget(side, at, pose) {
   const shoulder = pose?.[side]?.shoulder;
-  const scale = shoulderSpan(pose) * ARM_IN_SPANS;
+  const shoulders = shoulderSpan(pose);
+  // The learned arm if there is one, the population average until then. Both
+  // are a length in the same units -- the picture -- so the handover when the
+  // learned one arrives is a few percent, not a jump.
+  const learned = shoulders ? armSpan[side].feed(pose[side], shoulders) : 0;
+  const scale = learned || shoulders * ARM_IN_SPANS;
   if (shoulder && scale) lastAnchor[side] = { x: shoulder.x, y: shoulder.y, scale };
   const held = lastAnchor[side];
   // Only the very first frames, before any body has ever been seen, take the
