@@ -161,3 +161,41 @@ test('every mode the signs can ask for is one the duel knows', () => {
   }
   assert.ok(['magic', 'bow', 'fist'].includes(GUARD_MODE));
 });
+
+test('the off hand keeps being read while the guard is up', () => {
+  // Otherwise the sign freezes for as long as you guard, and dropping your
+  // hands arms whatever you were showing before you raised them -- a weapon
+  // appearing at the exact moment you stopped guarding.
+  const input = createInputMode();
+  hold(input, pair(2));                                  // bow
+  assert.equal(input.sign, 2);
+
+  // Guard, while the off hand quietly changes to a one underneath.
+  for (let i = 0; i < SIGN_HOLD + 2; i++) {
+    input.update(at(pair(1), 0.15), SHOULDERS);
+  }
+  assert.equal(input.mode, 'fist', 'still guarding');
+  assert.equal(input.sign, 1, 'but the hand has been read all along');
+
+  // Hands down: the mode that comes back is the one being shown NOW.
+  assert.equal(input.update(pair(1)).mode, 'magic');
+});
+
+test('crossed hands take the mode from the right hand, not the leftmost one', () => {
+  // A guard holds both hands close together in front of you, which is exactly
+  // where a little noise swaps their x order. Sided by x alone the duel would
+  // read its MODE off the rune hand -- your drawing fingers picking the weapon.
+  const input = createInputMode();
+  const [left, right] = pair(2);               // the LEFT hand is showing two
+  // x has them the wrong way round; the body model knows better.
+  const crossed = [
+    { ...right, side: 'left', bodySide: 'right' },
+    { ...left, side: 'right', bodySide: 'left' },
+  ];
+  assert.equal(hold(input, crossed).mode, 'bow', 'the two was on the off hand');
+});
+
+test('and falls back to x when the body could not say', () => {
+  const input = createInputMode();
+  assert.equal(hold(input, pair(2)).mode, 'bow', 'no bodySide on these at all');
+});

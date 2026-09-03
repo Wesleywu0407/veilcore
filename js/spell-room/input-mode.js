@@ -17,6 +17,13 @@
 // Sides come from x position, never from MediaPipe's handedness label; the
 // webcam mirrors and the label is computed before the flip. See AGENTS.md 4.
 //
+// ...and from `bodySide` in preference to x where the body model could tell,
+// because x has one failure and this feature walks straight into it: a guard
+// holds both hands close together in front of you, which is exactly where a
+// little noise swaps their x order. Read by x alone, the duel would then take
+// its MODE from the wrong hand -- your rune hand's finger count deciding what
+// weapon you hold.
+//
 // Note what is still NOT consulted: the DRAWING hand's fingers. The bow is
 // loosed by opening the string hand, and mode is decided before the bow's own
 // state machine runs -- a gate that read that hand's closure would drop out of
@@ -45,6 +52,10 @@ export const SIGN_MODES = Object.freeze({ 1: 'magic', 2: 'bow' });
 /** The mode both hands held up asks for. */
 export const GUARD_MODE = 'fist';
 
+/** The player's left hand -- by the body where it could say, by x otherwise. */
+const offHandOf = hands =>
+  hands.find(hand => (hand.bodySide ?? hand.side) === 'left') ?? hands[0];
+
 export function createInputMode() {
   let mode = 'magic';
   let raised = false;
@@ -70,6 +81,17 @@ export function createInputMode() {
       // player with both hands up is not also trying to show you a number.
       raised = handsRaised(hands, pose, raised);
       if (raised) {
+        // Keep READING the off hand while guarding, and just not act on it.
+        //
+        // Returning here without this froze the sign for as long as the guard
+        // was held: drop your hands after ten seconds and the duel armed
+        // whatever you had been showing before you raised them, not what your
+        // hand is doing now. And because a sign needs SIGN_HOLD frames to
+        // settle, the stale one stayed out for several frames after that -- a
+        // weapon appearing that the player never asked for, at the exact moment
+        // they stopped guarding and most needed to know what they were holding.
+        handSign(offHandOf(hands)?.landmarks ?? null, offHand);
+
         const transition = { mode: GUARD_MODE, previous: mode, changed: GUARD_MODE !== mode };
         mode = GUARD_MODE;
         return transition;
@@ -84,8 +106,7 @@ export function createInputMode() {
         // ask, and a bow or a guard needs two anyway.
         next = 'magic';
       } else {
-        const left = hands.find(hand => hand.side === 'left') ?? hands[0];
-        const asked = SIGN_MODES[handSign(left?.landmarks ?? null, offHand)];
+        const asked = SIGN_MODES[handSign(offHandOf(hands)?.landmarks ?? null, offHand)];
         // An unrecognised count -- three fingers, or a hand mid-change -- holds
         // whatever is running rather than dumping the player somewhere they did
         // not ask for.

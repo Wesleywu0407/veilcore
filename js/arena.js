@@ -1878,7 +1878,10 @@ function driveFingers(frame) {
     // sturdier test, and it says what the rule actually is.
     const hand = hands.length === 1
       ? (side === 'right' ? hands[0] : null)
-      : (hands.find(h => h.side === side) ?? null);
+      // `bodySide` where the body could tell, x otherwise. Two hands held close
+      // together -- a guard -- is where x swaps on noise alone, and swapping
+      // here animates one hand's fingers on the end of the other one's arm.
+      : (hands.find(h => (h.bodySide ?? h.side) === side) ?? null);
     playerAvatar.fingers(side, hand ? fingerCurls(hand.landmarks, _curls[side]) : null);
 
     // Only two directions are carried across, never the palm normal: the
