@@ -44,9 +44,18 @@ export const ARM_IN_SPANS = 1.78;
 // note in handTarget().
 const REACH_FULL = 0.93;
 
-// How much of the leftover length to spend on depth. Not 1: a hand held at
-// shoulder height in front of you is not at full stretch toward the lens.
-const REACH_DEPTH = 0.85;
+// How much of the leftover length to spend on depth.
+//
+// Was 0.85, on the reasoning that a hand held at shoulder height in front of
+// you is not at full stretch toward the lens. True of an arm, and the wrong
+// trade from inside your own head: the eye sits EYE_AHEAD in front of the face
+// already, so every bit the hand is held BACK comes off the gap between them,
+// and the hand reads as pressed against the lens.
+//
+// 1.0 spends the whole remainder on depth, which puts the hand as far out as
+// the arm can hold it. It cannot overshoot: the three components are scaled by
+// REACH_FULL together, so the total is still 0.93 of an arm at most.
+const REACH_DEPTH = 1.0;
 
 // ── The last shoulder each arm was measured against ──
 //

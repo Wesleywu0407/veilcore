@@ -80,6 +80,9 @@ const EYE_AHEAD = 0.30;    // clears the porcelain helm, same as the duel
 // was widened to 0.50 forward at the same time to bring the far hand inside it.
 const ORBIT_FOV = 52;
 const FIRST_PERSON_FOV = 75;
+// The duel runs this same formulation with the same height, look and lens, and
+// only a longer distance (5.5) -- close enough is a matter of what else has to
+// be in shot, and there the other duelist does. See _chasePos in js/arena.js.
 const ORBIT_DISTANCE = 3.6;
 const ORBIT_HEIGHT = 2.4;
 

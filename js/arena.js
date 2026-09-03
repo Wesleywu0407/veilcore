@@ -1110,7 +1110,12 @@ const CAST_UP = 3.46;      // above the duelist's feet
 const CAST_SIDE = 0.5;     // toward the drawing shoulder
 const CAST_LOOK_Y = 2.61;
 const CAST_LOOK_FWD = 0.72;
-const DUEL_FOV = 58;
+// The mirror's orbit, with only the distance changed. See the note where the
+// chase position is built.
+const ORBIT_DISTANCE = 5.5;   // the mirror's 3.6 leaves no room for a rival
+const ORBIT_HEIGHT = 2.4;     // the mirror's, exactly
+const ORBIT_LOOK_Y = 1.7;     // the mirror's, exactly -- the chest, not ahead
+const DUEL_FOV = 52;          // the mirror's ORBIT_FOV, was 58
 const CAST_FOV = 62;
 // Drawing a bow goes to FIRST PERSON, and it gets there as a move rather than a
 // swap: the lens leaves the chase camera, travels in to the duelist's own eye,
@@ -1228,9 +1233,21 @@ function updateCamera(dt) {
   // or looking up while duelling would tilt the shoulder shot with it.
   _flat.set(Math.sin(orbitYaw), 0, Math.cos(orbitYaw));
 
-  _chasePos.copy(playerPosition).addScaledVector(_forward, -7.8);
-  _chasePos.y += 4.1;
-  _chaseLook.copy(playerPosition).setY(1.45).addScaledVector(_forward, 3.2);
+  // ── The mirror's orbit, moved out far enough to still see a duel ──
+  //
+  // The mirror parks at 3.6 back and 2.4 up, looking at the body's own chest,
+  // through a 52-degree lens -- a camera for looking at YOURSELF. The duel's
+  // was 7.8 back, 4.1 up and aimed 3.2 ahead of you: a chase camera, framing
+  // the room rather than the body, which is why the same tracking read as two
+  // different characters.
+  //
+  // Same formulation as the mirror now, and the same lens. The one number that
+  // is not the mirror's is the distance: at 3.6 the rival is a speck, and this
+  // is still a duel. 5.5 is as close as the body can come with the other
+  // duelist still legible.
+  _chasePos.copy(playerPosition).addScaledVector(_forward, -ORBIT_DISTANCE);
+  _chasePos.y += ORBIT_HEIGHT;
+  _chaseLook.copy(playerPosition).setY(ORBIT_LOOK_Y);
 
   _right.set(-_flat.z, 0, _flat.x);
   _castPos.copy(playerPosition)
