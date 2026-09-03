@@ -88,6 +88,8 @@ bowView.setVisible(false);
 playerAvatar.setPosition(playerPosition);
 opponentAvatar.setPosition(opponentPosition);
 let bot = createOpponentController(opponentPosition);
+// Off while the skills are being rebuilt. See the note in the bot update.
+const RIVAL_FIGHTS_BACK = false;
 
 let match = createMatch();
 const cooldowns = { ringfall: 0, aegis: 0, 'gravity-seal': 0, bow: 0 };
@@ -997,7 +999,9 @@ const DRAW_STEP = 0.1;
 // eye whenever the bow or the fists come up -- but that only ever happens with
 // a camera attached and both hands committed to something. V is the way to look
 // down your own arm while casting one-handed, or with no webcam at all.
-let forcedEye = false;
+// First person on the way in, as the mirror does: the claim is that the body
+// is yours, and that reads at once from behind your own eyes. V still swaps.
+let forcedEye = true;
 let debugBow = false;
 let debugDraw = 0;
 let debugSide = 'right';
@@ -1441,133 +1445,37 @@ roomCodeInput?.addEventListener('input', () => {
   roomCodeInput.value = normaliseRoomCode(roomCodeInput.value);
 });
 
+/**
+ * The tracked body, and nothing else.
+ *
+ * ── What used to be here ──
+ *
+ * Everything: the sign recogniser choosing a weapon, the rune gate, the cast
+ * state machine, the bow's draw and loose, the boxing detector, and three
+ * overlay layers. Each of them read the same hands and each of them had an
+ * opinion about the body, and between them the character was never simply the
+ * player's -- it was on loan from whichever system held it that frame.
+ *
+ * They are all still in this file and none of them are called. That is
+ * deliberate: the skills are being redesigned from scratch, and the raw
+ * material -- updateCast, bowState, boxing, inputMode, the spell definitions --
+ * is worth more sitting here than deleted. Wire them back in one at a time,
+ * onto a body that already works.
+ *
+ * The one rule the rebuild should keep: nothing but body.drive() may pose the
+ * skeleton. Everything that broke on the way here broke by ignoring it.
+ */
 function updateHand(now) {
   if (!tracking) {
     playerCharging = false;
-    updateDebugBow();
     return;
   }
-  const frame = getFrame();
-  // The pose goes across too: the guard is now both hands raised, which is a
-  // posture measured against the shoulder line rather than a count of fingers.
-  const mode = inputMode.update(frame.hands, frame.pose);
-
-  // ── The body is the player's, and nothing else may pose it ──
-  //
-  // One call, before every branch, running the SAME code the mirror runs --
-  // both arms, both wrists, the fingers and the head. See body-map.js.
-  //
-  // What used to happen instead: each mode posed the body its own way. The bow
-  // drove both arms into a draw, the fists drove them into a guard, the rune
-  // gate owned the right arm and let go of it whenever you were not pinching.
-  // So the character was never yours; it was on loan from whichever system had
-  // it that frame, and no amount of correcting the tracking underneath could
-  // show through that.
-  //
-  // The game systems all still run -- they aim, they fire, they do damage. They
-  // simply no longer touch the skeleton.
-  const seen = body.drive(frame);
+  const seen = body.drive(getFrame());
   bodyPlacement = seen.placement;
   bodyReadout = seen.readout;
-
-  if (mode.mode === 'fist') {
-    if (mode.changed) {
-      resetMagic();
-      bowState.reset();
-      bowAim.reset();
-      bowRead = null;
-      bowView.setVisible(false);
-      // Fresh baselines. Carrying the ones from before the wrists rolled would
-      // measure this stance against how the hands sat in the last one.
-      boxing.reset();
-    }
-    bowMode = false;
-    fistMode = true;
-    const fists = boxing.update(frame.hands, now);
-    punchInRange = opponentInPunchRange();
-    // A raised guard is not a telegraph. Leaving this on would have the rival
-    // shield itself for as long as the fists are up, which is the whole match.
-    playerCharging = false;
-    if (fists.left.punched) throwPunch('left', now);
-    if (fists.right.punched) throwPunch('right', now);
-    drawFistLayer(frame, fists);
-    return;
-  }
-
-  if (mode.mode === 'bow') {
-    if (mode.changed) {
-      resetMagic();
-      bowAim.reset();
-      fistMode = false;
-      boxing.reset();
-    }
-    bowMode = true;
-    bowRead = bowState.update(frame.hands, now);
-    playerCharging = bowRead.phase === 'nocked' && bowRead.draw > 0.2;
-    bowStringSide = bowRead.stringSide ?? bowStringSide;
-    bowView.setVisible(playerAvatar.drawing);
-    bowView.setNocked(bowRead.phase === 'nocked');
-    bowView.setDraw(bowRead.phase === 'nocked' ? bowRead.draw : 0);
-
-    if (bowRead.phase === 'nocked' && bowRead.bowWrist) {
-      bowAim.update(bowRead.bowWrist, bowRead.draw, now);
-    }
-    if (bowRead.event?.type === 'loosed') {
-      fireBow(bowRead.event.power, now, bowAim.reticle);
-      bowAim.reset();
-    } else if (bowRead.phase !== 'nocked') {
-      bowAim.reset();
-    }
-    drawBowLayer(frame, bowRead);
-    return;
-  }
-
-  if (mode.changed || bowMode || fistMode) {
-    bowState.reset();
-    bowAim.reset();
-    bowRead = null;
-    bowMode = false;
-    bowView.setVisible(false);
-    boxing.reset();
-    fistMode = false;
-    punchInRange = false;
-    resetMagic();
-  }
-  // A held shoulder is only good while it is still YOUR shoulder: once the
-  // hands are gone the body may be somewhere else by the time they come back.
-  if (!frame.tracked) body.forget();
-
-  const gate = isPinching(frame.tracked ? frame.landmarks : null, frame.handScale, now);
-  const cast = updateCast(gate && frame.tracked, frame.tip, now);
-  const ringfallCharging = cast.phase === 'charging' && cast.rune?.id === 'ringfall';
-  // ── The same body map the mirror uses ──
-  //
-  // This used to unproject the fingertip through castCamera at a fixed depth,
-  // which is camera-relative: the hand moved when the lens did, had no idea how
-  // long your arm was, and none of the mirror's work reached it. Measured
-  // against your own shoulders instead, the arm means the same thing from
-  // behind, from inside the head, and through every swing the duel's camera
-  // makes. See js/spell-room/body-map.js.
-  const runeHand = frame.hands?.find(h => (h.bodySide ?? h.side) === 'right')
-    ?? (frame.hands?.length === 1 ? frame.hands[0] : null);
-  // The arm, the wrist and the fingers were all driven at the top of this
-  // function by body.drive(). Nothing about a rune poses the body any more:
-  // `cast` below still decides what is being drawn and what it costs.
-  playerCharging = cast.phase === 'charging';
-  // The ring forms at the hand while the charge is held, and only then goes.
-  // Ringfall only: Aegis and Gravity Seal are not this shape and borrowing the
-  // halo for them would make the charge stop telling you which rune you drew.
-  updateHaloCharge(ringfallCharging, cast.charge);
-  if (cast.event?.type === 'fired') castPlayerSpell(cast.event.rune.id, cast.event.charge, now);
-  else if (cast.event?.type === 'overloaded') {
-    flashUntil = now + 520;
-    flashKind = 'overload';
-  } else if (cast.event?.type === 'fizzled') {
-    flashUntil = now + 240;
-    flashKind = 'fizzle';
-  }
-  drawHandLayer(frame, gate, cast);
+  void now;
 }
+
 
 // Hold Ringfall's ring at the casting hand while the charge builds. The hand
 // comes from the rig rather than from the body's position: IK is what moved it,
@@ -1736,12 +1644,20 @@ function step(now) {
     opponentAvatar.setPosition(opponentPosition);
     opponentAvatar.face(botState.facing);
     opponentAvatar.update(dt, botState.speed, botState.telegraph);
-    if (botState.shield && spendMana(match, 'opponent', DUEL.aegisCost)) {
-      spells.castAegis('opponent', opponentPosition, 0.65, now);
-    }
-    if (botState.cast) {
-      botCastCount += 1;
-      botCast(botCastCount % 4 === 0 ? arena.cores.player.position : botState.cast.target);
+    // ── The rival does not attack while the body is being rebuilt ──
+    //
+    // It still walks, still faces you and still animates, so the arena is not
+    // an empty room -- but a bot that kills you every ninety seconds is not
+    // something you can test a tracking rig in front of. Delete this comment
+    // and the guard below to give it its spells back.
+    if (RIVAL_FIGHTS_BACK) {
+      if (botState.shield && spendMana(match, 'opponent', DUEL.aegisCost)) {
+        spells.castAegis('opponent', opponentPosition, 0.65, now);
+      }
+      if (botState.cast) {
+        botCastCount += 1;
+        botCast(botCastCount % 4 === 0 ? arena.cores.player.position : botState.cast.target);
+      }
     }
   }
 
