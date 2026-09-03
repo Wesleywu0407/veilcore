@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createBowAim } from '../js/spell-room/aim.js';
+import { createFocus, FOCUS } from '../js/spell-room/aim.js';
 
 test('the nock position becomes the centre of relative bow aim', () => {
   const aim = createBowAim();
@@ -64,4 +65,77 @@ test('a lower gain moves the crosshair less for the same hand movement', () => {
   assert.ok(tight > 0 && wide > 0, 'both should steer the same way');
   // Proportional to the gain, within what the filters leave behind.
   assert.ok(Math.abs(tight / wide - 20 / 55) < 0.02, `ratio ${tight / wide}`);
+});
+
+// ─── Focus ───────────────────────────────────────────────────────────────────
+//
+// The range's reward for holding still, which until now lived in practice.js
+// beside a camera and could not be run without one.
+
+/** Feed a wrist moving at a constant speed for `seconds`, at 30Hz. */
+function hold(focus, speed, seconds) {
+  const dt = 1 / 30;
+  let x = 0.5;
+  for (let i = 0; i < Math.round(seconds * 30); i++) {
+    x += speed * dt;
+    focus.update({ x, y: 0.5 }, dt);
+  }
+  return focus.value;
+}
+
+test('a hand held still settles, and keeps settling', () => {
+  // It approaches 1 rather than arriving: at RISE 0.9 a perfectly still hand is
+  // at 0.94 after three seconds and still climbing. Worth writing down, because
+  // the last few percent of the lens are only there for someone who really
+  // stopped -- and because a test that demanded 1.0 would be testing arithmetic
+  // that does not exist.
+  const three = createFocus();
+  assert.ok(hold(three, 0, 3) > 0.9, `three seconds only reached ${three.value.toFixed(2)}`);
+  const six = createFocus();
+  assert.ok(hold(six, 0, 6) > three.value, 'holding longer did not settle further');
+});
+
+test('a hand moving in earnest earns none', () => {
+  const focus = createFocus();
+  assert.ok(hold(focus, FOCUS.SPEED * 1.5, 3) < 0.05, `settled at ${focus.value.toFixed(2)}`);
+});
+
+test('a slow drift costs SOME focus, not all of it', () => {
+  // The reason this is a ramp and not a gate: creeping onto a target must not
+  // throw the lens open.
+  const focus = createFocus();
+  const drift = hold(focus, (FOCUS.FLOOR + FOCUS.SPEED) / 2, 3);
+  assert.ok(drift > 0.2 && drift < 0.8, `a half-speed drift settled at ${drift.toFixed(2)}`);
+});
+
+test('focus is lost faster than it is won', () => {
+  // FALL above RISE on purpose: settling is earned and a twitch should cost it.
+  const rising = createFocus();
+  hold(rising, 0, 0.5);
+  const falling = createFocus();
+  hold(falling, 0, 4);                       // fully settled
+  const lost = 1 - hold(falling, FOCUS.SPEED * 2, 0.5);
+  assert.ok(lost > rising.value,
+    `gained ${rising.value.toFixed(2)} in half a second but only lost ${lost.toFixed(2)}`);
+});
+
+test('forgetting drops the speed estimate as well as the focus', () => {
+  // Otherwise the next draw inherits the last one's hand speed and opens the
+  // lens for a hand that is already still.
+  const focus = createFocus();
+  hold(focus, FOCUS.SPEED * 2, 2);
+  assert.ok(focus.speed > 0);
+  focus.forget();
+  assert.equal(focus.value, 0);
+  assert.equal(focus.speed, 0);
+});
+
+test('a jump between draws is not read as speed', () => {
+  // forget() drops the last wrist too, so the first frame after picking the bow
+  // back up cannot produce a huge raw speed out of a hand that teleported.
+  const focus = createFocus();
+  hold(focus, 0, 3);
+  focus.forget();
+  focus.update({ x: 0.9, y: 0.9 }, 1 / 30);   // somewhere else entirely
+  assert.equal(focus.speed, 0, 'the first frame after forgetting invented a speed');
 });

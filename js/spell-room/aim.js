@@ -86,3 +86,57 @@ export function createBowAim({ gain = AIM.gain } = {}) {
     },
   };
 }
+
+// ─── Focus: what holding still buys ──────────────────────────────────────────
+//
+// Lived in practice.js as four module-level variables and a function that
+// mutated three of them. Pure and stateful is a fine thing to be, but it has to
+// be an OBJECT to be either -- as loose variables in a page that owns a camera
+// it could not be tested, and the range is the one room whose whole job is to
+// be judged by numbers.
+//
+// Nothing here changed on the way across. Same maths, same constants, same
+// order of operations; only the state moved inside.
+export const FOCUS = Object.freeze({
+  // Below FLOOR the hand is held still -- that much is only the tracker
+  // breathing. At SPEED it is unambiguously moving. Between them the answer is
+  // proportional rather than a gate, so a slow drift costs SOME focus instead
+  // of all of it, and creeping onto a target does not throw the lens open.
+  FLOOR: 0.15,
+  SPEED: 0.50,
+  // How fast the speed estimate itself follows. Fast enough to notice a flinch,
+  // slow enough that one bad landmark is not one.
+  SMOOTH: 6,
+  // Focus is quicker to lose than to gain, deliberately: settling is a thing
+  // you earn and a twitch should cost it.
+  RISE: 0.9,
+  FALL: 1.5,
+});
+
+/**
+ * How settled the hand is, 0 to 1. Feed the bow wrist every frame it is nocked
+ * and forget() the moment it is not.
+ */
+export function createFocus(tune = FOCUS) {
+  let focus = 0;
+  let speed = 0;
+  let last = null;
+  return {
+    get value() { return focus; },
+    /** The smoothed hand speed, for a readout that has to show its working. */
+    get speed() { return speed; },
+    forget() { focus = 0; speed = 0; last = null; },
+    update(wrist, dt) {
+      if (!wrist || dt <= 0) return focus;
+      if (last) {
+        const raw = Math.hypot(wrist.x - last.x, wrist.y - last.y) / dt;
+        speed += (raw - speed) * Math.min(1, dt * tune.SMOOTH);
+      }
+      last = { x: wrist.x, y: wrist.y };
+      const target = 1 - clamp01((speed - tune.FLOOR) / (tune.SPEED - tune.FLOOR));
+      const rate = target > focus ? tune.RISE : tune.FALL;
+      focus += (target - focus) * Math.min(1, dt * rate);
+      return focus;
+    },
+  };
+}

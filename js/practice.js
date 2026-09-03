@@ -9,8 +9,9 @@ import * as THREE from 'three';
 import { buildEnvironment } from './arena/scene.js';
 import { initTracker, getFrame, disposeTracker } from './spell-room/tracker.js';
 import { createBowState, readBow, BOW } from './spell-room/archery.js';
+import { sideOf } from './spell-room/pose.js';
 import { createSignState, handSign } from './spell-room/hand-sign.js';
-import { createBowAim } from './spell-room/aim.js';
+import { createBowAim, createFocus, FOCUS } from './spell-room/aim.js';
 import { createBowView } from './arena/bow-view.js';
 import { loadGLB } from './arena/asset-library.js';
 
@@ -54,7 +55,7 @@ const FOV_FULL = 32;
 //
 // None of these four came off a real hand in front of a real camera, because
 // there is no way to measure a flinch from here. They are the shape of the
-// thing; the numbers want an eye on them. STILL_SPEED is the one to move first
+// thing; the numbers want an eye on them. FOCUS.SPEED is the one to move first
 // -- it decides whether ordinary tracking jitter reads as a steady hand.
 // The ceiling, as a percentage of magnification on top of whatever the draw has
 // already given. 40% means a fully settled hand sees the lens close from the
@@ -72,32 +73,17 @@ const FOCUS_MAX_ZOOM = 40;
 // sat on the steepest part of the curve and every flicker of noise moved the
 // lens. It wobbled by nearly two degrees, continuously.
 //
-// So STILL_FLOOR sits ABOVE the noise: anything under it is fully still, full
-// stop, with no sensitivity at all. The scale to STILL_SPEED then covers real
+// So FOCUS.FLOOR sits ABOVE the noise: anything under it is fully still, full
+// stop, with no sensitivity at all. The scale to FOCUS.SPEED then covers real
 // movement instead of the tracker's imagination. Same shape as every other
 // threshold in this project -- an on value, an off value, and a band between
 // them where nothing changes.
 //
 // Measured: this takes the wobble from +/-1.94 degrees to +/-0.12, and a hand
 // drifting 0.6 widths a second still gives the focus up completely.
-const STILL_FLOOR = 0.15;   // below this, held still -- it is only the tracker breathing
-const STILL_SPEED = 0.50;   // and at this, unambiguously moving
-// Speed is a derivative of a landmark that jitters, so it arrives full of noise
-// that has nothing to do with how still a hand is being held. Low-passed before
-// it is allowed to decide anything -- the same reason boxing.js compares span
-// against a slow follower instead of differentiating it.
-const SPEED_SMOOTH = 6;
-// Earned slowly, and given up slowly too -- a fast release is its own kind of
-// shake, because every twitch becomes a lurch outward and back. At 0.9 the lens
-// is 59% closed one second after you settle, which is exactly when the hold
-// clears and you are allowed to shoot, and it keeps creeping in for another
-// couple of seconds after that. 0.5 was tried first and took six seconds to
-// arrive, which is longer than anyone waits.
-const FOCUS_RISE = 0.9;
-const FOCUS_FALL = 1.5;
-// How fast the lens follows what the draw and the focus between them ask for.
-// The draw is computed from raw wrist positions and is noisy in its own right,
-// so this smooths a shake that was there before focus existed.
+// The stillness numbers moved to FOCUS in aim.js with the maths that reads
+// them, so the two cannot drift apart and so they can be tested without a
+// camera. Nothing about them changed on the way.
 const FOV_EASE = 5;
 
 const glCanvas = document.querySelector('[data-range-gl]');
@@ -266,26 +252,9 @@ let showPanel = false;
 let cvFrames = 0, cvAt = 0, cvHz = 0, lastFrameAt = 0;
 
 // 0 loose, 1 fully settled. Held across frames; only a nock starts it over.
-let focus = 0;
-let lastWrist = null;
-let handSpeed = 0;
+const focus = createFocus();
 
 /** How much of the lens the stillness of the bow hand has earned. */
-function updateFocus(wrist, dt) {
-  if (!wrist || dt <= 0) return focus;
-  if (lastWrist) {
-    const raw = Math.hypot(wrist.x - lastWrist.x, wrist.y - lastWrist.y) / dt;
-    handSpeed += (raw - handSpeed) * Math.min(1, dt * SPEED_SMOOTH);
-  }
-  lastWrist = { x: wrist.x, y: wrist.y };
-  // Proportional rather than a gate, so a slow drift costs some focus instead
-  // of all of it, and creeping onto a target does not throw the lens open.
-  const target = 1 - clamp01((handSpeed - STILL_FLOOR) / (STILL_SPEED - STILL_FLOOR));
-  const rate = target > focus ? FOCUS_RISE : FOCUS_FALL;
-  focus += (target - focus) * Math.min(1, dt * rate);
-  return focus;
-}
-
 const _ndc = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 const _origin = new THREE.Vector3();
@@ -308,6 +277,12 @@ function loose(power) {
   _origin.copy(camera.position).addScaledVector(_dir, 1.2);
   _ray.set(camera.position, _dir);
 
+  // ── The NEAREST one it actually crosses, not the best-centred one ──
+  //
+  // This took the smallest miss across every target, which is not what an arrow
+  // does: line up the far target behind the near one and a shot that passed
+  // clean through the near disc scored on the far one. Depth first, and a miss
+  // is only compared against another miss when neither was hit.
   let best = null;
   for (const target of targets) {
     // Each target is a disc facing the shooter; intersect its plane, then check
@@ -315,12 +290,21 @@ function loose(power) {
     _plane.setFromNormalAndCoplanarPoint(_normal, target.group.position);
     if (!_ray.intersectPlane(_plane, _hit)) continue;
     const miss = Math.hypot(_hit.x - target.group.position.x, _hit.y - target.group.position.y);
-    if (!best || miss < best.miss) best = { target, miss };
+    const depth = _hit.distanceTo(camera.position);
+    const hit = miss <= target.radius;
+    if (!best) { best = { target, miss, depth, hit }; continue; }
+    // A disc the arrow goes through stops it. Between two it went through, the
+    // near one; between two it missed, the one it came closest to, which is all
+    // the readout can honestly say.
+    if (hit && !best.hit) best = { target, miss, depth, hit };
+    else if (hit === best.hit && (hit ? depth < best.depth : miss < best.miss)) {
+      best = { target, miss, depth, hit };
+    }
   }
 
   shots.fired += 1;
   shots.lastPower = power;
-  if (best && best.miss <= best.target.radius) {
+  if (best?.hit) {
     shots.hit += 1;
     shots.lastMiss = best.miss;
     // Which ring: the three bands drawn in buildTarget.
@@ -386,15 +370,13 @@ function loop(now) {
     if (nocked && bow.bowWrist) {
       // The draw sets the lens, then stillness closes it further. Computed
       // before the aim, because the gain the aim runs at comes out of it.
-      updateFocus(bow.bowWrist, dt);
-      wantFov = lerp(FOV_SLACK, FOV_FULL, bow.draw) / (1 + (FOCUS_MAX_ZOOM / 100) * focus);
+      focus.update(bow.bowWrist, dt);
+      wantFov = lerp(FOV_SLACK, FOV_FULL, bow.draw) / (1 + (FOCUS_MAX_ZOOM / 100) * focus.value);
       // Whichever hand archery.js chose stays authoritative all the way through
       // the shared aiming controller; the host never guesses handedness again.
       bowAim.update(bow.bowWrist, bow.draw, now, aimFov / FOV_SLACK);
     } else {
-      focus = 0;
-      handSpeed = 0;
-      lastWrist = null;
+      focus.forget();
       wantFov = FOV_SLACK;
     }
 
@@ -470,9 +452,20 @@ const signs = { left: createSignState(), right: createSignState() };
  * with whatever it last saw the moment it was consulted again.
  */
 function readBowSign(hands) {
+  // NOTE: the count is deliberately NOT forgotten here, and that is a live bug,
+  // not a decision. A settled two outlives the hand that made it, so the frame a
+  // second hand comes back into view can arm the bow without anyone having asked
+  // -- the same fault input-mode.js was carrying, which forgetSign() exists to
+  // fix. It is left alone only because clearing it changes WHEN the bow comes
+  // up, and that was already demonstrated to somebody. Two lines when it can
+  // change: forgetSign(signs.left) and forgetSign(signs.right).
   if (hands?.length !== 2) return null;
   const read = readBow(hands);
-  const side = read?.bow?.side;
+  // By the body where it could say. archery.js keeps `side` sorted by x on
+  // purpose and that is right for the DRAW -- but these two states are indexed
+  // by it, so one frame of the x order flipping would hand each hand the other
+  // one's count.
+  const side = read?.bow ? sideOf(read.bow) : null;
   if (!side || !signs[side]) return null;
   return { side, sign: handSign(read.bow.landmarks, signs[side]) };
 }
@@ -616,8 +609,8 @@ function drawReadout(frame, bow, bowSign, armed) {
     line(`spans           ${bow.spans.toFixed(2)}`, 34, top + 84);
     line(`draw            ${(bow.draw * 100).toFixed(0)}%`, 34, top + 102, GOLD);
     line(`peak            ${(bow.peak * 100).toFixed(0)}%`, 34, top + 120);
-    line(`focus           ${(focus * 100).toFixed(0)}%  of ${FOCUS_MAX_ZOOM}%   lens ${aimFov.toFixed(1)}°`,
-      34, top + 138, focus > 0.6 ? GOLD : DIM);
+    line(`focus           ${(focus.value * 100).toFixed(0)}%  of ${FOCUS_MAX_ZOOM}%   lens ${aimFov.toFixed(1)}°`,
+      34, top + 138, focus.value > 0.6 ? GOLD : DIM);
     line(`hold            ${(bow.held / 1000).toFixed(2)}s / ${(MIN_HOLD_MS / 1000).toFixed(2)}s`
       + (bow.phase === 'nocked' ? (ready ? '  ready' : '  wait') : ''),
       34, top + 156, bow.phase !== 'nocked' ? DIM : ready ? GOLD : '#b8894a');
@@ -635,7 +628,7 @@ function drawReadout(frame, bow, bowSign, armed) {
     line(hands === 2 ? `show ${SIGN_BOW} fingers on the bow hand` : 'both hands in frame', 34, top + 66, '#b8894a');
     line(hands === 2 ? 'and close the other on the string' : 'to take up the bow', 34, top + 84, '#b8894a');
   }
-  line(`fov ${camera.fov.toFixed(1)}°   still ${STILL_FLOOR}..${STILL_SPEED}`, 34, top + 194, '#5d6b86', 10);
+  line(`fov ${camera.fov.toFixed(1)}°   still ${FOCUS.FLOOR}..${FOCUS.SPEED}`, 34, top + 194, '#5d6b86', 10);
   line(`DRAW_MIN ${BOW.DRAW_MIN}   DRAW_FULL ${BOW.DRAW_FULL}   max zoom ${FOCUS_MAX_ZOOM}%`, 34, top + 208, '#5d6b86', 10);
   line(`min hold ${(MIN_HOLD_MS / 1000).toFixed(2)}s   tracking ${cvHz.toFixed(0)} Hz`,
     34, top + 222, cvHz > 20 ? '#5d6b86' : '#b8894a', 10);
