@@ -112,7 +112,7 @@ early, that is the linear curve between them, not the bounds.
 
 ## 6. Tests
 
-`npm run test` must stay green — 110 passing, no camera required. The recogniser
+`npm run test` must stay green — 205 passing, no camera required. The recogniser
 is tested against synthetic shaky-hand input precisely so gesture maths can be
 changed without picking up a camera. Keep new logic in pure functions that can
 be tested the same way; camera and DOM stay out of `js/spell-room/*` and

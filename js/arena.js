@@ -1218,9 +1218,13 @@ function updateCamera(dt) {
   // as a cast.
   //
   // So it keys off the cast, which is the thing the shot is for: the gate is
-  // shut and a rune is being drawn. Never in a stance -- the bow and the fists
+  // shut and a rune is being drawn. Never in an eye -- the bow and the fists
   // have a camera of their own, and two of them fighting over the lens is what
   // this shot looked like before.
+  //
+  // Note this means the cast shot does not exist until you press V. The duel
+  // opens in first person, and there is no over-the-shoulder framing to be had
+  // from inside your own head. That is the design and not a dead branch.
   const wantCast = playerCasting && !eyeMode ? 1 : 0;
   const wantBow = eyeMode ? 1 : 0;
   castFraming += (wantCast - castFraming) * Math.min(1, dt * 9);
