@@ -1162,6 +1162,7 @@ const _downrange = new THREE.Vector3();
 let eyeFov = BOW_EYE_FOV;
 const _bowHand = new THREE.Vector3();
 const _flat = new THREE.Vector3();
+const _eyeForward = new THREE.Vector3();
 const _chasePos = new THREE.Vector3();
 const _chaseLook = new THREE.Vector3();
 const _castPos = new THREE.Vector3();
@@ -1226,7 +1227,30 @@ function updateCamera(dt) {
   // The eye, nudged forward of the face. At the Head bone itself the helm
   // surrounds the lens and you look at the inside of your own mask; 0.30 ahead
   // puts it behind the near plane, where back-face culling disposes of it.
-  _bowPos.copy(_bowEye).addScaledVector(_flat, EYE_AHEAD);
+  // ── The plain eye is the MIRROR's camera, exactly ──
+  //
+  // Same formula, same constants: forward built from the mouse yaw plus the
+  // head's own turn, pitch from the mouse plus the head's own lift, the lens
+  // sitting EYE_AHEAD in front of the eye and looking six units straight down
+  // that line. See updateCamera() in js/mirror.js.
+  //
+  // What it replaces: a position built on `_flat`, which is yaw only with the
+  // pitch flattened to zero and the head not consulted at all, aimed at a
+  // lerped cinematic target. That camera could not look up and could not be
+  // turned by your face, which is most of why the duel felt like a different
+  // game from the mirror even after the bodies became the same code.
+  //
+  // The EASED head angles, not the raw ones: read the target and the view
+  // arrives somewhere the head has not got to yet.
+  const eyePitch = orbitPitch + playerAvatar.lookingUp;
+  const eyeYaw = orbitYaw + playerAvatar.looking;
+  _eyeForward.set(
+    Math.sin(eyeYaw) * Math.cos(eyePitch),
+    Math.sin(eyePitch),
+    Math.cos(eyeYaw) * Math.cos(eyePitch),
+  ).normalize();
+
+  _bowPos.copy(_bowEye).addScaledVector(plainEye ? _eyeForward : _flat, EYE_AHEAD);
 
   // Body, then arm, then bow, then downrange. The last beat matters as much as
   // the others: a camera that settles pointing AT your own bow hand is a camera
@@ -1234,12 +1258,10 @@ function updateCamera(dt) {
   // over it -- which is what leaves the bow sitting low and to the left, held
   // in the left hand, exactly where an archer's own bow sits.
   if (plainEye) {
-    // Straight out of the eye, no beats and no body parts on the way. Aimed
-    // along _forward rather than _flat, so that looking up and down with the
-    // mouse actually tilts the view -- the stance move deliberately stays level
-    // because an archer's horizon should not roll, but a head that cannot look
-    // up is not a first-person camera at all.
-    _downrange.copy(_bowPos).addScaledVector(_forward, 12);
+    // Six units along the same line the lens sits on -- the mirror's number.
+    // The blend off the chase shot stays, so entering first person still flies
+    // in rather than cutting; only where it ARRIVES has changed.
+    _downrange.copy(_bowPos).addScaledVector(_eyeForward, 6);
     _bowLook.copy(_chaseLook).lerp(_downrange, smooth(bowFraming));
   } else {
     _bowLook.copy(_chaseLook)
