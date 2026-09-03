@@ -90,9 +90,6 @@ bowView.setVisible(false);
 playerAvatar.setPosition(playerPosition);
 opponentAvatar.setPosition(opponentPosition);
 let bot = createOpponentController(opponentPosition);
-// Off while the skills are being rebuilt. See the note in the bot update.
-const RIVAL_FIGHTS_BACK = false;
-
 let match = createMatch();
 const cooldowns = { ringfall: 0, aegis: 0, 'gravity-seal': 0, bow: 0 };
 let selectedRuneId = 'ringfall';
@@ -1804,20 +1801,16 @@ function step(now) {
     opponentAvatar.setPosition(opponentPosition);
     opponentAvatar.face(botState.facing);
     opponentAvatar.update(dt, botState.speed, botState.telegraph);
-    // ── The rival does not attack while the body is being rebuilt ──
-    //
-    // It still walks, still faces you and still animates, so the arena is not
-    // an empty room -- but a bot that kills you every ninety seconds is not
-    // something you can test a tracking rig in front of. Delete this comment
-    // and the guard below to give it its spells back.
-    if (RIVAL_FIGHTS_BACK) {
-      if (botState.shield && spendMana(match, 'opponent', DUEL.aegisCost)) {
-        spells.castAegis('opponent', opponentPosition, 0.65, now);
-      }
-      if (botState.cast) {
-        botCastCount += 1;
-        botCast(botCastCount % 4 === 0 ? arena.cores.player.position : botState.cast.target);
-      }
+    // The rival shields and casts again. It was held off while the body was
+    // being rebuilt -- a bot that kills you every ninety seconds is not
+    // something you can test a tracking rig in front of -- and the thing that
+    // was being rebuilt now works, so there is nothing left to hold it for.
+    if (botState.shield && spendMana(match, 'opponent', DUEL.aegisCost)) {
+      spells.castAegis('opponent', opponentPosition, 0.65, now);
+    }
+    if (botState.cast) {
+      botCastCount += 1;
+      botCast(botCastCount % 4 === 0 ? arena.cores.player.position : botState.cast.target);
     }
   }
 
