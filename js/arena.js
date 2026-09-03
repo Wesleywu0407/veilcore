@@ -188,11 +188,24 @@ async function loadMeshyDuelists() {
     const clips = gltf.animations.concat(
       settled.flatMap(result => (result.status === 'fulfilled' ? result.value.animations : [])),
     );
+    // ── The player gets no idle; the rival keeps one ──
+    //
+    // An idle clip shifts the weight, swings the free arm and turns the torso
+    // the whole time. On a body that is supposed to BE you, everything it does
+    // on its own is something you are not doing -- it reads as a puppet with
+    // your hands attached, and it is the single loudest reason the duel felt
+    // less like you than the mirror did. The mirror has never loaded a clip.
+    //
+    // Only the idle goes. Run, cast and hit stay, because a body that slides
+    // across the floor with still legs is a worse lie than a body that sways.
+    // The rival is not you and keeps everything: it should look alive.
+    //
     // Clips are immutable data in three.js; each avatar's mixer builds its own
     // bindings, so the two duelists can share one array.
-    playerAvatar.replaceVisual(clone(gltf.scene), clips);
+    const stillClips = clips.filter(clip => !/idle/i.test(clip.name));
+    playerAvatar.replaceVisual(clone(gltf.scene), stillClips);
     opponentAvatar.replaceVisual(clone(gltf.scene), clips);
-    setStatus(`Meshy duelist loaded — ${clips.length} clips`);
+    setStatus(`Meshy duelist loaded — ${clips.length} clips, ${stillClips.length} on you`);
   } catch (error) {
     playerAvatar.useFallback();
     opponentAvatar.useFallback();

@@ -734,7 +734,20 @@ export function createDuelist(scene, {
   let oneShot = null;
 
   function play(action) {
-    if (!action || action === activeAction) return;
+    if (action === activeAction) return;
+    // ── Nothing wanted is an instruction, not a no-op ──
+    //
+    // This used to return early on a falsy action, which meant "keep whatever
+    // is running". That is right for a clip that failed to load and wrong for a
+    // body that is deliberately meant to stand still: asked for no idle, it
+    // would leave the RUN cycle playing the moment the player stopped walking.
+    // Letting go instead lets the body settle into whatever the tracking is
+    // driving, which is the mirror's behaviour.
+    if (!action) {
+      activeAction?.fadeOut(0.18);
+      activeAction = null;
+      return;
+    }
     action.reset().fadeIn(0.18).play();
     activeAction?.fadeOut(0.18);
     activeAction = action;
@@ -1179,9 +1192,26 @@ export function createDuelist(scene, {
       if (clips.length) {
         mixer = new THREE.AnimationMixer(imported);
         const find = pattern => clips.find(clip => pattern.test(clip.name));
-        const idle = find(/idle/i) ?? clips[0];
+        // ── No idle is a legitimate answer ──
+        //
+        // The fallback used to be `?? clips[0]`, which turns "these clips
+        // contain no idle" into "use whichever clip came first" -- and with a
+        // run clip in the set, that made standing still play a run cycle.
+        //
+        // A caller can now hand over run/cast/hit and no idle, and get a body
+        // that is perfectly still until it is moved. That is what the mirror
+        // does by loading no clips at all, except this keeps the walk cycle:
+        // the constant sway of an idle is the thing that reads as "not me",
+        // and the legs not moving while you walk reads as broken.
+        //
+        // The single-clip case still falls back, since a rig that ships one
+        // clip means that clip to be its idle.
+        const idle = find(/idle/i) ?? (clips.length === 1 ? clips[0] : null);
         const run = find(/run|walk/i) ?? idle;
-        actions = { idle: mixer.clipAction(idle), run: mixer.clipAction(run) };
+        actions = {
+          idle: idle ? mixer.clipAction(idle) : null,
+          run: run ? mixer.clipAction(run) : null,
+        };
         // Armless copies of the locomotion clips, for use while the hands are
         // busy. IK wins the final pose either way, but it can only correct what
         // the clip left -- and a clip that rewrites the arm every frame gives
@@ -1190,10 +1220,10 @@ export function createDuelist(scene, {
         // argued over.
         // One pair per thing that can take the arms: a rune uses the right arm
         // only, a bow uses both.
-        actions.idleRight = mixer.clipAction(withoutArms(idle, 'right'));
-        actions.runRight = mixer.clipAction(withoutArms(run, 'right'));
-        actions.idleBoth = mixer.clipAction(withoutArms(idle, 'both'));
-        actions.runBoth = mixer.clipAction(withoutArms(run, 'both'));
+        actions.idleRight = idle ? mixer.clipAction(withoutArms(idle, 'right')) : null;
+        actions.runRight = run ? mixer.clipAction(withoutArms(run, 'right')) : null;
+        actions.idleBoth = idle ? mixer.clipAction(withoutArms(idle, 'both')) : null;
+        actions.runBoth = run ? mixer.clipAction(withoutArms(run, 'both')) : null;
         // A missing clip is survivable: the action stays undefined and
         // cast()/flash() degrade to the emissive flash on their own.
         for (const [key, clip] of [['cast', find(/cast/i)], ['hit', find(/hit/i)]]) {
@@ -1209,7 +1239,7 @@ export function createDuelist(scene, {
         mixer.addEventListener('finished', event => {
           if (event.action === oneShot) oneShot = null;
         });
-        play(actions.idle);
+        play(actions.idle ?? null);
       }
     },
     update(dt, speed = 0, telegraph = 0) {
