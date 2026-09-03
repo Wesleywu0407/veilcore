@@ -35,14 +35,16 @@ export function createSpellSystem(scene) {
   }
 
   function castGravity(source, target, power, now) {
-    const radius = 3.4 + power * 2.4;
+    const radius = DUEL.gravityRadius + power * DUEL.gravityRadiusCharged;
     state.seal = {
       source,
-      until: now + 1700 + power * 1700,
-      strength: 2.5 + power * 3.2,
+      until: now + (DUEL.gravitySeconds + power * DUEL.gravitySecondsCharged) * 1000,
+      strength: DUEL.gravityPush + power * DUEL.gravityPushCharged,
       radius,
     };
     seal.group.position.copy(target).setY(0.09);
+    // 4.8 is the radius the MODEL was authored at, so this is a fact about the
+    // GLB and not a balance number. It belongs here and not in config.js.
     seal.group.scale.setScalar(radius / 4.8);
     seal.group.visible = true;
   }
@@ -71,7 +73,7 @@ export function createSpellSystem(scene) {
       const dx = victimPosition.x - seal.group.position.x;
       const dz = victimPosition.z - seal.group.position.z;
       if (Math.hypot(dx, dz) <= state.seal.radius) {
-        result[`${victim}Speed`] = 0.42;
+        result[`${victim}Speed`] = DUEL.gravitySlow;
         outward.copy(victimPosition).setY(0);
         if (outward.lengthSq() < 0.01) outward.set(0, 0, victim === 'player' ? 1 : -1);
         outward.normalize();

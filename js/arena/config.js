@@ -29,6 +29,22 @@ export const DUEL = Object.freeze({
   aegisSecondsCharged: 2.6,
   gravityCost: 30,
   gravityCooldown: 6.5,
+  // The Gravity Seal, all of it. These were spread across castGravity() and
+  // update() in spell-system.js -- the seal's whole balance, including the one
+  // number that decides what the spell DOES, living at three call sites. Moved
+  // verbatim; not one of them is retuned here.
+  //
+  // Each pair is the floor plus what a full charge adds.
+  gravitySeconds: 1.7,
+  gravitySecondsCharged: 1.7,
+  gravityRadius: 3.4,             // world units
+  gravityRadiusCharged: 2.4,
+  gravityPush: 2.5,               // metres a second, outward from the centre
+  gravityPushCharged: 3.2,
+  // What is left of the victim's walking speed inside the ring. This is the
+  // spell: the push is a nudge and the duration is a window, but 0.42 is what
+  // makes standing in one a decision.
+  gravitySlow: 0.42,
   // The bow is an aimed alternative to Ringfall, so its first balance pass uses
   // the same economy and damage envelope. Only aim, rather than a free discount,
   // is allowed to distinguish it until the duel has been played by hand.
