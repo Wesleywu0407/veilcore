@@ -109,13 +109,17 @@ export function createInputMode() {
       // simply never appeared. The bow had the same hole and always had: you
       // hold a bow with both hands up too.
       //
-      // So a guard is both hands up and NOTHING ASKED FOR -- which is what two
-      // fists are, since a fist counts zero and zero is not a weapon. It is
-      // still safe from the failure that took the count out of the guard in the
-      // first place, an arm resting at your side reading as a closed hand,
-      // because a resting arm is not raised.
+      // So a guard is both hands up and a FIST held up in front of you -- which
+      // is what a guard is. It is still safe from the failure that took the
+      // count out of the guard in the first place, an arm resting at your side
+      // reading as a closed hand, because a resting arm is not raised.
+      //
+      // A count of zero and not merely "nothing recognised": three fingers, or
+      // a hand caught mid-change, holds whatever is running, exactly as it does
+      // on the way through below. Two rules for one question is how the posture
+      // came to be able to take a cast off you in the first place.
       raised = handsRaised(hands, pose, raised);
-      if (raised && !SIGN_MODES[sign]) {
+      if (raised && sign === 0) {
         const transition = { mode: GUARD_MODE, previous: mode, changed: GUARD_MODE !== mode };
         mode = GUARD_MODE;
         return transition;

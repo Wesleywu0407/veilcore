@@ -100,12 +100,17 @@ test('raised hands that are casting do not report as guarding', () => {
   assert.equal(input.guarding, false);
 });
 
-test('an unrecognised count still leaves the raised hands to the guard', () => {
-  // Three fingers is not asking for anything, so the posture is the only
-  // statement being made and it stands.
+test('an unrecognised count holds the mode even with the hands up', () => {
+  // Three fingers asks for nothing, and "asks for nothing" is not "asks for a
+  // guard" -- a fist is. One rule for an unrecognised count, whether the hands
+  // are up or down, because two rules is how the posture learned to take a
+  // cast off the player.
   const input = createInputMode();
-  hold(input, pair(3));
-  assert.equal(input.update(at(pair(3), 0.15), SHOULDERS).mode, 'fist');
+  hold(input, pair(2));
+  assert.equal(input.mode, 'bow');
+  const held = () => input.update(at(pair(3), 0.15), SHOULDERS);
+  for (let i = 0; i < SIGN_HOLD + 2; i++) held();
+  assert.equal(input.mode, 'bow', 'three fingers up dumped the player into a guard');
 });
 
 test('one hand up is not a guard', () => {
@@ -119,11 +124,12 @@ test('hands hovering at the shoulder line do not flicker the weapon', () => {
   // The most expensive thing a wobble can do here is change weapon, so the
   // threshold to raise and the threshold to drop are deliberately different.
   const input = createInputMode();
-  input.update(at(pair(1), 0.15), SHOULDERS);        // clearly up
+  hold(input, pair(0));                              // fists, so the guard is on
+  input.update(at(pair(0), 0.15), SHOULDERS);        // clearly up
   assert.ok(input.guarding);
-  input.update(at(pair(1), 0.375), SHOULDERS);       // sagging, inside the band
+  input.update(at(pair(0), 0.375), SHOULDERS);       // sagging, inside the band
   assert.ok(input.guarding, 'it should not let go this easily');
-  input.update(at(pair(1), 0.45), SHOULDERS);        // properly down
+  input.update(at(pair(0), 0.45), SHOULDERS);        // properly down
   assert.ok(!input.guarding);
 });
 
@@ -216,8 +222,13 @@ test('the off hand keeps being read while the guard is up', () => {
   hold(input, pair(2));                                  // bow
   assert.equal(input.sign, 2);
 
-  // Guard, while the off hand quietly changes to a three underneath. Three
-  // asks for nothing, so the guard keeps the hands -- but the count must move.
+  // Fists up: the guard. Then the off hand quietly opens to a three underneath
+  // -- three asks for nothing, so the guard keeps the hands, but the count
+  // itself must still move.
+  for (let i = 0; i < SIGN_HOLD + 2; i++) {
+    input.update(at(pair(0), 0.15), SHOULDERS);
+  }
+  assert.equal(input.mode, 'fist', 'fists up is the guard');
   for (let i = 0; i < SIGN_HOLD + 2; i++) {
     input.update(at(pair(3), 0.15), SHOULDERS);
   }
