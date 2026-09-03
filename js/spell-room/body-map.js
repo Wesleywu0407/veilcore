@@ -146,6 +146,21 @@ export function createBodyMap(avatar) {
   const readout = { left: null, right: null };
   let placement = null;
 
+  /**
+   * Drop the held shoulder and elbow. A held shoulder is only good while it is
+   * still YOUR shoulder: once the hands are gone the body may be somewhere else
+   * entirely by the time they come back.
+   *
+   * A closure, not just a property on the returned object -- drive() calls it,
+   * and when this WAS only a property, `forget()` inside drive() was simply not
+   * defined. It threw on every frame where tracking dropped, which is every
+   * time a hand leaves the picture, and took the rest of the update with it.
+   */
+  function forget() {
+    lastAnchor.left = lastAnchor.right = null;
+    lastBend.left = lastBend.right = null;
+  }
+
   function unflip(landmarks) {
     for (let i = 0; i < landmarks.length; i++) {
       const p = landmarks[i];
@@ -313,10 +328,7 @@ export function createBodyMap(avatar) {
     /** The right arm's learned length, for a readout. */
     get arm() { return armSpan.right; },
     /** A held shoulder is only good while it is still YOUR shoulder. */
-    forget() {
-      lastAnchor.left = lastAnchor.right = null;
-      lastBend.left = lastBend.right = null;
-    },
+    forget,
   };
 }
 

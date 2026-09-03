@@ -1,0 +1,73 @@
+<!-- ─── The camera-only path, without a camera ──────────────────────────────
+     `npm test` cannot reach body-map.js's drive(): it needs three.js and a
+     loaded rig, and the real thing only ever runs while tracking is live. So
+     every bug in it has been found by Wesley opening the game.
+
+     This feeds drive() frames shaped exactly like the tracker's -- one hand,
+     two, none, tracking lost, no body, no face -- and reports which throw.
+     It found `forget is not defined`, which fired every time a hand left the
+     picture and took the rest of the frame's update with it.
+
+     Open it at /scripts/drive-smoke.html with the dev server running.
+     ──────────────────────────────────────────────────────────────────────── -->
+<!doctype html><meta charset="utf-8"><title>Veilcore — drive smoke test</title>
+<body style="margin:0;background:#111;color:#ccc;font:12px monospace;padding:10px">
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { createDuelist } from '../js/arena/duelist.js';
+import { loadGLB } from '../js/arena/asset-library.js';
+import { createBodyMap } from '../js/spell-room/body-map.js';
+const { clone } = await import('three/addons/utils/SkeletonUtils.js');
+
+const gltf = await loadGLB('../assets/models/arena/sealed-porcelain-duelist-fingers.glb');
+const a = createDuelist(new THREE.Scene(), { colour: 0xffd98a, name: 'P', castShadow: false });
+a.replaceVisual(clone(gltf.scene), []);
+const map = createBodyMap(a);
+
+/** A frame shaped exactly like the tracker's, with one right hand and a body. */
+function frame({ hands = 1, tracked = true, pose = true, head = true } = {}) {
+  const lm = new Array(21).fill(null).map((_, i) => ({ x: 0.6 + i * 0.004, y: 0.4 + i * 0.006, z: i * 0.002 }));
+  const hand = side => ({
+    side, bodySide: side, landmarks: lm,
+    wrist: lm[0], tip: lm[8], anchor: { x: 0.62, y: 0.42 },
+  });
+  return {
+    tracked, stale: false, decodeMs: 0.2,
+    hands: hands === 0 ? [] : hands === 1 ? [hand('right')] : [hand('left'), hand('right')],
+    pose: pose ? {
+      left:  { shoulder: { x: 0.42, y: 0.4 }, elbow: { x: 0.38, y: 0.55 }, wrist: { x: 0.36, y: 0.7 } },
+      right: { shoulder: { x: 0.58, y: 0.4 }, elbow: { x: 0.62, y: 0.55 }, wrist: { x: 0.64, y: 0.7 } },
+    } : null,
+    head: head ? { yaw: 0.2, pitch: 0.1, lift: -0.4, levelled: true, points: null } : null,
+  };
+}
+
+const cases = [
+  ['one hand, full body',   frame()],
+  ['two hands',             frame({ hands: 2 })],
+  ['no hands',              frame({ hands: 0 })],
+  ['not tracked',           frame({ tracked: false })],
+  ['no pose',               frame({ pose: false })],
+  ['no face',               frame({ head: false })],
+  ['nothing at all',        frame({ hands: 0, tracked: false, pose: false, head: false })],
+];
+const results = [];
+for (const [label, f] of cases) {
+  try {
+    let seen;
+    for (let i = 0; i < 30; i++) { seen = map.drive(f); a.update(1 / 60); }
+    results.push({ case: label, ok: true, placement: seen?.placement ?? null,
+      returned: Boolean(seen && seen.readout) });
+  } catch (e) {
+    results.push({ case: label, ok: false, error: e.message });
+  }
+}
+window.__probe = { allPassed: results.every(r => r.ok && r.returned), results };
+document.body.append(Object.assign(document.createElement('pre'),
+  { textContent: JSON.stringify(window.__probe, null, 1) }));
+window.__done = true;
+</script></body>
