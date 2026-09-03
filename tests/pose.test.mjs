@@ -381,9 +381,30 @@ test('a wild frame cannot become the arm for the rest of the session', () => {
   assert.equal(span.value, good, 'implausible against the shoulders, so ignored');
 });
 
+test('a chain built from two different arms is rejected, not learned', () => {
+  // The frame that actually broke it. With one hand up the other arm is down
+  // and half hidden, and the body model hands back a chain whose shoulder and
+  // wrist belong to opposite arms. It measures about two shoulder widths --
+  // which the old 2.6 bound happily accepted, and the learner keeps the MAX,
+  // so one such frame set the scale for the whole session.
+  const span = createArmSpan();
+  span.feed(arm(0.15, 0.13), 0.16);          // 1.75 widths: a real arm
+  const honest = span.value;
+  span.feed(arm(0.17, 0.15), 0.16);          // 2.00 widths: a crossed chain
+  assert.ok(span.value <= honest, `a bad chain raised the scale to ${span.value}`);
+});
+
+test('the bound is anatomy, and stated as such', () => {
+  // An arm is about 0.35 of a person and their shoulders about 0.25, so the
+  // ratio lives near 1.4 and does not credibly reach 1.9.
+  const span = createArmSpan();
+  span.feed(arm(0.16, 0.146), 0.16);         // 1.91 widths
+  assert.equal(span.value, 0, 'past the plausible band, so nothing is learned');
+});
+
 test('an overshoot leaks back down rather than sticking forever', () => {
   const span = createArmSpan();
-  span.feed(arm(0.20, 0.20), 0.16);          // just inside plausible, but long
+  span.feed(arm(0.15, 0.138), 0.16);         // 1.80 widths: just inside plausible
   const peak = span.value;
   for (let i = 0; i < 200; i++) span.feed(arm(0.15, 0.13), 0.16);
   assert.ok(span.value < peak, 'the maximum has to be able to come down');

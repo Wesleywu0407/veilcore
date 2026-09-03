@@ -374,7 +374,26 @@ export function headPitch(lift, rest) {
 // A wild frame must not become the arm's length for the rest of the session,
 // so a reading is only believed if it is plausible against the shoulders, and
 // the remembered maximum leaks back down slowly if it was ever overshot.
-const ARM_SPAN_SANE = 2.6;      // shoulder widths -- past this it is a bad frame
+// ── The upper bound has to be anatomy, not a guess ──
+//
+// This was 2.6, which is not a bound at all: a real arm is about 0.35 of a
+// person's height and their shoulders about 0.25, so the ratio sits near 1.4
+// and does not credibly pass 1.8. Everything between 1.8 and 2.6 was a bad
+// frame being believed.
+//
+// And bad frames are common in exactly the case that broke: with one hand up,
+// the OTHER arm is down and often half occluded, and MediaPipe will hand back
+// a chain that takes its shoulder from one arm and its wrist from the other.
+// That reads about two shoulder widths -- comfortably inside 2.6, so it was
+// accepted, and since the learner keeps the MAXIMUM it then poisoned the scale
+// for the rest of the session. Measured on screen: 2.07, 2.05, 2.04, 1.97.
+//
+// A scale that is too large divides every offset down, so the character's hand
+// stays hard against its own shoulder -- which from inside its head is the far
+// edge of the frame, an arm's length too close to the lens. Hence "with one
+// hand I can barely see it, with two it is fine": two hands in front of you are
+// the pose the body model reads most reliably.
+const ARM_SPAN_SANE = 1.85;     // shoulder widths -- past this it is a bad frame
 const ARM_SPAN_DECAY = 0.995;   // about twenty seconds to halve, at the body rate
 
 /**
