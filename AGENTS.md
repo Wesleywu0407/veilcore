@@ -59,6 +59,7 @@ npm run test   # node --test, no camera needed
 npm run runes  # how far apart the rune shapes sit
 npm run arm    # replay a mirror recording and check the learned arm length
 npm run tip    # what the wand tip's filter costs in lag, stillness and recognition
+npm run sign   # how often the off hand's count fires on a gesture in transit
 npm run assets # triangles, textures, download size and VRAM per GLB
 ```
 
@@ -120,7 +121,7 @@ early, that is the linear curve between them, not the bounds.
 
 ## 6. Tests
 
-`npm run test` must stay green — 207 passing, no camera required. The recogniser
+`npm run test` must stay green — 208 passing, no camera required. The recogniser
 is tested against synthetic shaky-hand input precisely so gesture maths can be
 changed without picking up a camera. Keep new logic in pure functions that can
 be tested the same way; camera and DOM stay out of `js/spell-room/*` and

@@ -174,6 +174,43 @@ test('the sign is readable, so a HUD can show what the hand is asking for', () =
   assert.equal(input.sign, 2);
 });
 
+test('a hand on its way to a two does not stop at the one it passes through', () => {
+  // The bug SIGN_HOLD was raised for. Fingers leave a fist at staggered times,
+  // so a hand opening into a two really is a one for a few frames, and the duel
+  // used to believe it and hand you the rune mode mid-gesture. Nothing is
+  // misread here: every frame below is an honest reading of the hand.
+  const input = createInputMode();
+  // Start in the bow, so that stopping at the one on the way is VISIBLE as a
+  // mode change. A count of zero holds whatever is running, so the fist below
+  // leaves the bow in hand.
+  hold(input, pair(2), SIGN_HOLD + 2);
+  assert.equal(input.mode, 'bow');
+  hold(input, pair(0), SIGN_HOLD + 2);
+  assert.equal(input.mode, 'bow', 'a fist should hold the weapon, not change it');
+
+  const bends = { thumb: 1 };
+  COUNTING.forEach(name => { bends[name] = 1; });
+
+  let stoppedAtOne = false;
+  // The index opens first and the middle follows four frames later, which is
+  // four frames in which this hand is an honest, unambiguous ONE.
+  for (let f = 0; f < 8; f++) {
+    bends[COUNTING[0]] = 0;
+    if (f >= 4) bends[COUNTING[1]] = 0;
+    const hands = [
+      { side: 'left', landmarks: poseHand(bends) },
+      { side: 'right', landmarks: poseHand({}) },
+    ];
+    if (input.update(hands).mode === 'magic') stoppedAtOne = true;
+  }
+  assert.equal(stoppedAtOne, false,
+    'the duel took the bow away mid-gesture, because the hand passed through ' +
+    'a one on its way to a two. SIGN_HOLD is too short — run `npm run sign`.');
+
+  // And once the hand has actually arrived, the two still lands.
+  assert.equal(hold(input, pair(2), SIGN_HOLD + 2).mode, 'bow');
+});
+
 test('the sign goes when the hand making it does', () => {
   const input = createInputMode();
   hold(input, pair(2));

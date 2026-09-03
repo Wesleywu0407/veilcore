@@ -13,6 +13,7 @@
     "runes": "node scripts/rune-distance.mjs",
     "arm": "node scripts/arm-span.mjs",
     "tip": "node scripts/tip-filter.mjs",
+    "sign": "node scripts/sign-hold.mjs",
     "assets": "node scripts/glb-info.mjs",
     "refs": "node scripts/check-refs.mjs"
   }

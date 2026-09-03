@@ -175,7 +175,7 @@ not the posture:
 | **two fingers** | take up the bow |
 | **a fist** | guard — throw punches |
 
-The count has to hold for about an eighth of a second before it counts, so a
+The count has to hold for about a third of a second before it counts, so a
 landmark glitch cannot change your weapon, and a count nobody recognises — three
 fingers, or a hand caught mid-change — holds whatever is already running rather
 than dumping you somewhere you did not ask for. The HUD shows what it read, and
@@ -373,6 +373,7 @@ npm run test         # 110 tests, no camera needed
 npm run runes        # how far apart the rune shapes sit
 npm run arm <file>   # replay a mirror recording and check the learned arm
 npm run tip          # what the wand tip's filter costs, per draw speed
+npm run sign         # false triggers on the off hand's count, per SIGN_HOLD
 npm run assets       # triangles, textures, download size and VRAM per GLB
 ```
 
