@@ -2078,9 +2078,11 @@ const _handScreen = [0, 0];
 //
 // This is a feel number and it has one job: make the line match the hand. It is
 // not measurable from here -- no probe knows how much of YOUR rune is finger and
-// how much is arm. Too big a line, lower it; a rune that will not reach across
-// the view, raise it. 1 is the behaviour that was too sensitive.
-const RUNE_GAIN = 0.5;
+// how much is arm, and three attempts to find this from a probe found the wrong
+// thing each time. Too big a line, lower it; a rune that will not reach across
+// the view, raise it. 1 was the behaviour that was too sensitive; 0.5 was still
+// too sensitive on the glass; 0.35 is where it was watched and kept.
+const RUNE_GAIN = 0.35;
 const _pen = { x: 0, y: 0 };
 
 /** The tip, pulled back toward the hand's own anchor by RUNE_GAIN. */
