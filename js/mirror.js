@@ -221,10 +221,24 @@ const _camBack = new THREE.Vector3();
 const _along = { left: new THREE.Vector3(), right: new THREE.Vector3() };
 const _across = { left: new THREE.Vector3(), right: new THREE.Vector3() };
 
-// An arm, measured in shoulder widths. Roughly 1.5 on a person; it is only ever
-// used to turn a distance in the picture into a fraction of THIS arm, so it can
-// be a constant rather than something else to track.
-const ARM_IN_SPANS = 1.55;
+// An arm, measured in shoulder widths, for before the learner has an answer.
+//
+// ── Measured, not derived ──
+//
+// This was 1.55, from anatomy: shoulders about 0.23 of a person's height, arm
+// about 0.33. That is a true fact about people and the wrong number for here,
+// because MediaPipe's shoulder landmarks sit inside the acromion, nearer the
+// neck, so every ratio measured against them runs high -- correctly.
+//
+// The honest readings this rig has actually produced cluster at 1.72-1.85, so
+// the default is the middle of that. It matters more than a default usually
+// does: the learner only ever refines this, and refining needs an arm held out
+// across the frame, which is a thing nobody can do on a train. Starting at the
+// right number means the calibration gesture is optional rather than required.
+//
+// One person's proportions, so it is a sample and not a population -- but it is
+// the right sample, being the person the thing is for.
+const ARM_IN_SPANS = 1.78;
 
 // ...and only until the player's own has been seen. See createArmSpan().
 const armSpan = { left: createArmSpan(), right: createArmSpan() };
@@ -268,11 +282,26 @@ function handTarget(side, at, pose) {
   // The learned arm if there is one, the population average until then. Both
   // are a length in the same units -- the picture -- so the handover when the
   // learned one arrives is a few percent, not a jump.
-  // Both are now in SHOULDER WIDTHS, so multiplying by the CURRENT shoulders is
-  // what makes the mapping survive the player moving toward or away from the
-  // lens. See createArmSpan().
-  const learned = shoulders ? armSpan[side].feed(pose[side], shoulders) : 0;
-  const scale = shoulders * (learned || ARM_IN_SPANS);
+  // Both are in SHOULDER WIDTHS, so multiplying by the CURRENT shoulders is what
+  // makes the mapping survive the player moving toward or away from the lens.
+  // See createArmSpan().
+  //
+  // ── Evidence may raise the default, but not lower it until it has settled ──
+  //
+  // Every reading of an arm that is not held out across the frame is
+  // foreshortened, and reads SHORT. So a learner that has only ever seen
+  // ordinary movement holds a number below the truth -- and taking it over the
+  // default would shrink every movement, which is worse than not learning at
+  // all. That is the state anyone is in who cannot stand up and stick an arm
+  // out, which on a train is everyone.
+  //
+  // Once it has settled it has had a proper look -- three corroborating
+  // readings and forty frames with no growth -- and is then trusted outright,
+  // including when it lands below the default, since some arms are shorter.
+  const rig = armSpan[side];
+  const learned = shoulders ? rig.feed(pose[side], shoulders) : 0;
+  const widths = rig.settled ? learned : Math.max(learned, ARM_IN_SPANS);
+  const scale = shoulders * widths;
   if (shoulder && scale) lastAnchor[side] = { x: shoulder.x, y: shoulder.y, scale };
   const held = lastAnchor[side];
   // Only the very first frames, before any body has ever been seen, take the
@@ -593,10 +622,12 @@ function drawReadout(frame) {
     // Already in shoulder widths -- no dividing here. Dividing a stored length
     // by the live shoulders is what let this print 1.89 against a 1.85 bound.
     const rig = armSpan.right;
+    const inForce = rig.settled ? rig.widths : Math.max(rig.widths, ARM_IN_SPANS);
     ctx.fillText(
-      rig.widths
-        ? `arm — ${rig.widths.toFixed(2)} shoulder widths, ${rig.settled ? 'LOCKED' : 'learning…'}`
-        : `arm — ${ARM_IN_SPANS} shoulder widths, assumed`,
+      rig.settled
+        ? `arm — ${inForce.toFixed(2)} shoulder widths, LOCKED`
+        : `arm — ${inForce.toFixed(2)} shoulder widths, default`
+          + (rig.widths > ARM_IN_SPANS ? ' + seen' : ''),
       440, 160);
   }
   const deg = r => (r * 180 / Math.PI).toFixed(0);
