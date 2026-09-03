@@ -1889,6 +1889,14 @@ const simHand = () => playerAvatar.reachOffset('right', -0.25, 0.22, 0.62, _simH
 // and why the symptom was a correct hand sitting at a wrong ANGLE on the end of
 // a correctly placed arm. See js/spell-room/body-map.js.
 
+// Scratch for the hands, one per side. These were declared inside the block the
+// camera-relative palm path lived in, and went out with it when that block was
+// deleted by range -- which is how a refactor that only meant to remove a
+// coordinate system took three live variables with it.
+const _curls = { left: {}, right: {} };
+const _palmAlong = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+const _palmAcross = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+
 /**
  * Which of the player's hands drives this side of the duelist.
  *
