@@ -2056,6 +2056,46 @@ const _strokeTip = new THREE.Vector3();
 const _strokePoint = new THREE.Vector3();
 const _handScreen = [0, 0];
 
+// ─── How far the pen moves for how far the finger does ───────────────────────
+//
+// The arm follows your WRIST and the pen follows your FINGERTIP, and a rune is
+// drawn mostly with the finger and the wrist rather than with the whole arm. So
+// the fingertip travels several times as far as the wrist does, and once the
+// stroke was mapped onto the body -- at your measured arm's length, through a
+// 52-degree lens -- a small movement of one finger came out as a line across
+// half the screen. The arm looked still and the line did not match it.
+//
+// The gain is applied about the HAND'S OWN ANCHOR, which is the point the arm is
+// posed from. That is what makes it honest rather than a fudge:
+//
+//   move your whole arm   the anchor moves too, and the pen tracks it 1:1
+//   move only the finger  the anchor stays, and the pen moves by this fraction
+//
+// So sweeping your arm across the room still draws a rune across the room, and
+// only the part of the movement your ARM did not make is damped. A uniform scale
+// about a point cannot change a shape, and the recogniser is handed the raw tip
+// either way, so nothing here can move a recognition score.
+//
+// This is a feel number and it has one job: make the line match the hand. It is
+// not measurable from here -- no probe knows how much of YOUR rune is finger and
+// how much is arm. Too big a line, lower it; a rune that will not reach across
+// the view, raise it. 1 is the behaviour that was too sensitive.
+const RUNE_GAIN = 0.5;
+const _pen = { x: 0, y: 0 };
+
+/** The tip, pulled back toward the hand's own anchor by RUNE_GAIN. */
+function penPoint(at, hand) {
+  const anchor = hand ? anchorOf(hand) : null;
+  if (!anchor) return at;
+  _pen.x = anchor.x + (at.x - anchor.x) * RUNE_GAIN;
+  _pen.y = anchor.y + (at.y - anchor.y) * RUNE_GAIN;
+  return _pen;
+}
+
+/** The hand the rune comes out of, by the body and not by x. See sideOf(). */
+const runeHandOf = frame =>
+  frame.hands?.find(h => sideOf(h) === 'right') ?? frame.hands?.[0] ?? null;
+
 // The filter on the hand-to-fingertip correction. Slack on purpose: a hand's
 // length in pixels changes as fast as you walk, and it is the one term here
 // that carries the rig's animation. The deadband is in PIXELS, unlike every
@@ -2118,7 +2158,7 @@ function tipCorrection(frame, out, now) {
   if (!playerAvatar.fingertipWorld(_strokeTip)) return out;
   _strokeTip.project(camera);
   if (_strokeTip.z > 1) return out;
-  const hand = strokeScreen(frame.tip, _handScreen);
+  const hand = strokeScreen(penPoint(frame.tip, runeHandOf(frame)), _handScreen);
   if (!hand) return out;
   out[0] = _fixX.filter((_strokeTip.x * 0.5 + 0.5) * innerWidth - hand[0], now);
   out[1] = _fixY.filter((-_strokeTip.y * 0.5 + 0.5) * innerHeight - hand[1], now);
@@ -2268,7 +2308,7 @@ let pinnedCount = 0;
  * nothing: if any point cannot be placed, every one of them falls back to where
  * this drew before there was a body to hang it on.
  */
-function placeStroke(points, tip, fix) {
+function placeStroke(points, tip, fix, hand) {
   const n = points.length;
   // A stroke that got shorter is a new stroke: magic.js empties the array
   // rather than trimming it, so this cannot mistake one for a rewind.
@@ -2278,7 +2318,9 @@ function placeStroke(points, tip, fix) {
   for (let i = 0; i < n && placed; i++) {
     if (i < pinnedCount) continue;
     if (!_pinned[i]) _pinned[i] = new THREE.Vector3();
-    if (!body.handAt('right', points[i], _pinned[i])) { placed = false; break; }
+    // Pinned through the gain, on the frame it arrives -- against the anchor
+    // the hand had at the time, which is the only one that was ever true for it.
+    if (!body.handAt('right', penPoint(points[i], hand), _pinned[i])) { placed = false; break; }
     playerAvatar.root.worldToLocal(_pinned[i]);
     pinnedCount = i + 1;
   }
@@ -2295,7 +2337,7 @@ function placeStroke(points, tip, fix) {
   // The live tip is the one point that SHOULD be rederived: it is where your
   // finger is now, not where it was.
   if (placed) {
-    const world = strokeScreen(tip, _screen);
+    const world = strokeScreen(penPoint(tip, hand), _screen);
     if (world) {
       _sx[n] = world[0] + fix[0];
       _sy[n] = world[1] + fix[1];
@@ -2314,7 +2356,8 @@ function placeStroke(points, tip, fix) {
 function drawHandLayer(frame, gate, cast, now) {
   if (!frame.tracked) return;
   const points = currentStroke();
-  placeStroke(points, frame.tip, tipCorrection(frame, _fix, now));
+  const hand = runeHandOf(frame);
+  placeStroke(points, frame.tip, tipCorrection(frame, _fix, now), hand);
   if (points.length > 1) {
     const swell = 1 + (cast.phase === 'charging' ? cast.charge : 0) * 1.4;
     // Detection runs at ~30Hz, so a circle arrives as roughly forty points. Join
