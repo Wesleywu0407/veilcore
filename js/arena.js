@@ -2097,7 +2097,6 @@ function drawSelfie(frame) {
 // read as yours; matching the two scales is a bigger change than that is worth
 // until it is a complaint.
 const _strokeTip = new THREE.Vector3();
-const _strokePoint = new THREE.Vector3();
 const _handScreen = [0, 0];
 
 // ─── How far the pen moves for how far the finger does ───────────────────────
@@ -2147,82 +2146,54 @@ const runeHandOf = frame =>
 // that carries the rig's animation. The deadband is in PIXELS, unlike every
 // other filter in this project, because that is the unit the correction is in.
 const FIX_FILTER = { minCutoff: 0.6, beta: 0, dCutoff: 1, deadband: 1.5 };
-
-/**
- * A point of the stroke, put where the hand that drew it would have been.
- *
- * Straight through body-map's own picture-to-world mapping -- the one that
- * places the arm -- and then through the duel's camera. So the rune is drawn
- * on the sphere your arm can actually reach: at your arm's measured length,
- * foreshortened by the lens that is looking at it, and swinging with the
- * camera like the thing it is attached to.
- *
- * The alternative was to keep drawing in tip space and scale it by some
- * number until it looked right. That number would have been a guess about an
- * arm this file already knows the length of.
- *
- * Null when the point cannot be placed -- no shoulder seen yet, or behind the
- * lens -- and the caller falls back to flat tip space, which is where all of
- * this drew before.
- */
-function strokeScreen(at, out) {
-  if (!body.handAt('right', at, _strokePoint)) return null;
-  _strokePoint.project(camera);
-  if (_strokePoint.z > 1) return null;
-  out[0] = (_strokePoint.x * 0.5 + 0.5) * innerWidth;
-  out[1] = (-_strokePoint.y * 0.5 + 0.5) * innerHeight;
-  return out;
-}
-
-/**
- * The last correction: hand target to FINGERTIP.
- *
- * strokeScreen() places a point where the hand goes, and the hand goes where
- * the IK wrist target is -- which is a hand's length short of the finger the
- * rune is coming out of. Rather than guess that length, it is measured on the
- * frame: the gap on screen between the live tip mapped as a hand and the rig's
- * own fingertip, which is the same point the halo gathers at. The whole stroke
- * moves by it, so the pen ends up at the pen's tip.
- *
- * ── And then smoothed, hard ──
- *
- * `fingertipWorld` reads a LIVE bone, and every clip in this rig animates: the
- * idle sway and the run bob arrive on that bone whether or not your hand moved.
- * eyeWorld() refuses to read the live Head bone for exactly this reason. This
- * one cannot refuse -- the correction is only meaningful against the finger
- * that is actually there -- so it is filtered instead, and it can afford to be
- * filtered heavily because it is a CALIBRATION: a hand's length in pixels,
- * which changes as slowly as you walk toward the lens. Nothing about a rune
- * needs it to be quick, and everything about a rune needs it to be still.
- */
 const _fixX = makeSteady(FIX_FILTER);
 const _fixY = makeSteady(FIX_FILTER);
 
 /**
- * ── And frozen for the length of a stroke ──
- *
- * Filtering was not enough once RUNE_GAIN came in. The correction is ADDED in
- * screen pixels and the stroke is SCALED, so shrinking the pen's travel to a
- * quarter left the correction's own wobble at full size against a rune four
- * times smaller -- and the pen now sits near the wrist, so the correction has
- * most of a hand to bridge and every curl of the finger changes it.
- *
- * But a hand's length in pixels cannot change during a rune. It is a
- * calibration, so it is measured between strokes and held still through them:
- * whatever it was on the frame the gate opened is what the whole rune is drawn
- * with. Nothing your fingers do while drawing can move the line any more.
+ * Where the rig's own fingertip lands on the glass. The only thing left in the
+ * drawing path that asks the 3D scene anything at all.
  */
-function tipCorrection(frame, out, now, gate) {
+function fingertipScreen(out) {
+  if (!playerAvatar.fingertipWorld(_strokeTip)) return null;
+  _strokeTip.project(camera);
+  if (_strokeTip.z > 1) return null;
+  out[0] = (_strokeTip.x * 0.5 + 0.5) * innerWidth;
+  out[1] = (-_strokeTip.y * 0.5 + 0.5) * innerHeight;
+  return out;
+}
+
+/**
+ * ── Where the rune sits, and why it is only an offset now ──
+ *
+ * The stroke is drawn FLAT, in the picture's own coordinates, and shifted as a
+ * whole so that it begins at the hand. It used to be placed properly: every
+ * point mapped through body-map onto the sphere the arm can reach, then
+ * projected through the duel's camera. That was more correct and it was
+ * unusable, because it tied the drawn line to three things that move on their
+ * own:
+ *
+ *   the shoulder anchor and the arm scale, remeasured every frame
+ *   the BODY, which turns to face the rival -- and the rival walks
+ *   the camera, whose heading in first person is the mouse's, not the body's
+ *
+ * The last two together are what did it. Your body swings to track a moving
+ * rival while the lens stays where you left it, so a rune pinned in body space
+ * sweeps across the glass on its own. That is not noise, and no filter can
+ * touch it: it is the rune being correctly attached to something that moves.
+ *
+ * So one offset, measured on the frame the gate opens and held for the length
+ * of the stroke -- a hand's length in pixels cannot change during a rune. After
+ * the frame a point is drawn on, there is nothing left in the path that could
+ * move it.
+ */
+function strokeOffset(frame, out, now, gate, hand) {
   if (gate) return out;          // mid-rune: keep the one the stroke began with
   out[0] = 0;
   out[1] = 0;
-  if (!playerAvatar.fingertipWorld(_strokeTip)) return out;
-  _strokeTip.project(camera);
-  if (_strokeTip.z > 1) return out;
-  const hand = strokeScreen(penPoint(frame.tip, runeHandOf(frame)), _handScreen);
-  if (!hand) return out;
-  out[0] = _fixX.filter((_strokeTip.x * 0.5 + 0.5) * innerWidth - hand[0], now);
-  out[1] = _fixY.filter((-_strokeTip.y * 0.5 + 0.5) * innerHeight - hand[1], now);
+  if (!fingertipScreen(_handScreen)) return out;
+  const pen = penPoint(frame.tip, hand);
+  out[0] = _fixX.filter(_handScreen[0] - pen.x * innerWidth, now);
+  out[1] = _fixY.filter(_handScreen[1] - pen.y * innerHeight, now);
   return out;
 }
 
@@ -2323,51 +2294,32 @@ function drawBowLayer(frame, bow) {
 }
 
 const _fix = [0, 0];
-const _screen = [0, 0];
 // Screen positions for the stroke plus the live tip, grown once and reused --
 // this runs every frame of every cast, and forty little arrays a frame is forty
 // little arrays a frame.
 const _sx = [];
 const _sy = [];
 
-// Where each point of the stroke sits in the DUELIST'S OWN SPACE, worked out
-// once when the point first arrives and then left alone. Grows to the longest
-// stroke of the session and is reused.
-const _pinned = [];
+// Where each point of the stroke was drawn, in screen pixels, worked out on the
+// frame it arrived and never touched again. Grows to the longest stroke of the
+// session and is reused.
 let pinnedCount = 0;
 
 /**
- * Place the stroke and the live tip on the glass, and say which space they
- * ended up in.
+ * Put the stroke and the live tip on the glass.
  *
- * ── Worked out once, not every frame ──
+ * ── Drawn once, and then it is a drawing ──
  *
- * A point of a rune is a place in the air. It does not move because you
- * breathed, and it must not: this used to re-derive all forty of them from the
- * live body every frame, and the mapping divides by `shoulderSpan × arm`, which
- * is remeasured from the pose on every one of those frames. A ruler that
- * wobbles one percent slides a hand at full reach by one percent of an arm with
- * the player standing perfectly still -- the same argument createArmSpan() was
- * frozen for, arriving by the other door. The whole rune shimmered, and the
- * shimmer got worse the more of it you had drawn.
+ * A point of a rune is a mark you have already made. It cannot move, and this
+ * used to let it: every point was re-derived from the live body and re-projected
+ * through the live camera on every frame, so the whole rune breathed with the
+ * shoulder measurement and swept with the body as it turned to track the rival.
+ * Now a point's screen position is worked out on the frame it is recorded and
+ * then left alone, which is the only arrangement in which a drawn line is
+ * actually still.
  *
- * So each point is pinned the frame it is recorded, and after that only the
- * body it belongs to and the camera may move it.
- *
- * Pinned in the DUELIST'S space and not the world's, which is the difference
- * between a rune drawn in front of you and a rune painted on the floor. Pin it
- * to the world and walking two steps on WASD leaves your own half-finished rune
- * behind you while the cursor goes with you. In body space it travels and turns
- * with you, as a thing held at arm's length does, and still cannot shimmer:
- * nothing remeasures it.
- *
- * ── One space for all of it ──
- *
- * Asked per point, a rune whose far edge passed behind the lens came out with
- * some points on the arm and the rest in flat tip space -- the same line in two
- * coordinate systems, which tears in half rather than degrading. All or
- * nothing: if any point cannot be placed, every one of them falls back to where
- * this drew before there was a body to hang it on.
+ * The live tip is the one point that SHOULD be rederived -- it is where your
+ * finger is now, not where it was.
  */
 function placeStroke(points, tip, fix, hand) {
   const n = points.length;
@@ -2375,50 +2327,22 @@ function placeStroke(points, tip, fix, hand) {
   // rather than trimming it, so this cannot mistake one for a rewind.
   if (n < pinnedCount) pinnedCount = 0;
 
-  let placed = true;
-  for (let i = 0; i < n && placed; i++) {
-    if (i < pinnedCount) continue;
-    if (!_pinned[i]) _pinned[i] = new THREE.Vector3();
-    // Pinned through the gain, on the frame it arrives -- against the anchor
-    // the hand had at the time, which is the only one that was ever true for it.
-    if (!body.handAt('right', penPoint(points[i], hand), _pinned[i])) { placed = false; break; }
-    playerAvatar.root.worldToLocal(_pinned[i]);
+  for (let i = pinnedCount; i < n; i++) {
+    const pen = penPoint(points[i], hand);
+    _sx[i] = pen.x * innerWidth + fix[0];
+    _sy[i] = pen.y * innerHeight + fix[1];
     pinnedCount = i + 1;
   }
-
-  if (placed) {
-    for (let i = 0; i < n; i++) {
-      playerAvatar.root.localToWorld(_strokePoint.copy(_pinned[i]));
-      _strokePoint.project(camera);
-      if (_strokePoint.z > 1) { placed = false; break; }
-      _sx[i] = (_strokePoint.x * 0.5 + 0.5) * innerWidth + fix[0];
-      _sy[i] = (-_strokePoint.y * 0.5 + 0.5) * innerHeight + fix[1];
-    }
-  }
-  // The live tip is the one point that SHOULD be rederived: it is where your
-  // finger is now, not where it was.
-  if (placed) {
-    const world = strokeScreen(penPoint(tip, hand), _screen);
-    if (world) {
-      _sx[n] = world[0] + fix[0];
-      _sy[n] = world[1] + fix[1];
-    } else placed = false;
-  }
-
-  if (placed) return true;
-  for (let i = 0; i <= n; i++) {
-    const at = i < n ? points[i] : tip;
-    _sx[i] = at.x * innerWidth;
-    _sy[i] = at.y * innerHeight;
-  }
-  return false;
+  const pen = penPoint(tip, hand);
+  _sx[n] = pen.x * innerWidth + fix[0];
+  _sy[n] = pen.y * innerHeight + fix[1];
 }
 
 function drawHandLayer(frame, gate, cast, now) {
   if (!frame.tracked) return;
   const points = currentStroke();
   const hand = runeHandOf(frame);
-  placeStroke(points, frame.tip, tipCorrection(frame, _fix, now, gate), hand);
+  placeStroke(points, frame.tip, strokeOffset(frame, _fix, now, gate, hand), hand);
   if (points.length > 1) {
     const swell = 1 + (cast.phase === 'charging' ? cast.charge : 0) * 1.4;
     // Detection runs at ~30Hz, so a circle arrives as roughly forty points. Join
