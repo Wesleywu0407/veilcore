@@ -37,6 +37,20 @@ import { RUNES, bestMatch, updateStroke, currentStroke, TUNE, TIP_FILTER }
 import { makeSteady } from '../js/spell-room/one-euro.js';
 
 const NOISE = 0.002;   // the hand model's residual wobble on a still fingertip
+// ── The half the first version of this tool missed ──
+//
+// A hand does not only carry the model's per-frame noise. It carries its own
+// TREMOR: a real, low-frequency wander of a few hertz that the person is not
+// choosing to make. White noise and tremor need completely different answers,
+// and a probe that models only the first will happily recommend a filter that
+// passes all of the second -- which is what happened, and what it felt like was
+// "too fast".
+//
+// minCutoff 1.2 sits below the tremor band on purpose, so the shipped filter
+// removed it. beta raises the cutoff with speed, so a large beta lets it back
+// in exactly while the hand is drawing.
+const TREMOR_HZ = 3.5;
+const TREMOR = 0.004;   // about 8px on a 1920 window, peak
 const SPAN = 0.30;     // a rune fills about a third of the picture
 const HZ = 30;
 const RUNS = 60;
@@ -82,9 +96,10 @@ function draw(rune, frames, cfg, rand) {
   updateStroke(false, { x: 0, y: 0 }, t);
   for (const p of walk(scaled(rune.points), frames)) {
     t += 1000 / HZ;
+    const phase = 2 * Math.PI * TREMOR_HZ * (t / 1000);
     updateStroke(true, {
-      x: fx.filter(p.x + (rand() - 0.5) * 2 * NOISE, t),
-      y: fy.filter(p.y + (rand() - 0.5) * 2 * NOISE, t),
+      x: fx.filter(p.x + (rand() - 0.5) * 2 * NOISE + Math.sin(phase) * TREMOR, t),
+      y: fy.filter(p.y + (rand() - 0.5) * 2 * NOISE + Math.cos(phase * 0.8) * TREMOR, t),
     }, t);
   }
   const points = currentStroke().slice();
@@ -104,6 +119,29 @@ function stillness(cfg) {
     last = out;
   }
   return (moved / n) * WIDE;
+}
+
+/**
+ * How much of the hand's own tremor reaches the screen, in pixels.
+ *
+ * Fed a hand holding a slow, steady sweep with a tremor riding on it, this is
+ * the amplitude of the tremor left in the output. It is the column that says
+ * whether a rune feels like it is being drawn or scribbled.
+ */
+function tremorThrough(cfg) {
+  const f = makeSteady(cfg);
+  const rand = rng(31337);
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < 90; i++) {
+    const t = (i + 1) * (1000 / HZ);
+    // A slow deliberate drift, so the filter is in its "moving" regime, plus
+    // the tremor that is not intended.
+    const intent = 0.5 + (i / 90) * 0.10;
+    const phase = 2 * Math.PI * TREMOR_HZ * (t / 1000);
+    const out = f.filter(intent + Math.sin(phase) * TREMOR + (rand() - 0.5) * 2 * NOISE, t);
+    if (i > 25) { const d = out - (0.5 + (i / 90) * 0.10); lo = Math.min(lo, d); hi = Math.max(hi, d); }
+  }
+  return ((hi - lo) / 2) * WIDE;
 }
 
 /** How far behind a sweeping hand the output runs, in frames. */
@@ -150,7 +188,7 @@ console.log('  recognition is ' + RUNES.map(r => r.name.toLowerCase().split(' ')
   + ';  ✗ never cast, ~ sometimes\n');
 process.stdout.write('  ' + 'filter'.padEnd(19));
 for (const f of SPEEDS) process.stdout.write(`${(f / HZ).toFixed(2)}s draw`.padStart(22));
-console.log('      lag      still');
+console.log('      lag      still    tremor');
 for (const [name, cfg] of candidates) {
   process.stdout.write('  ' + name.padEnd(19));
   for (const frames of SPEEDS) {
@@ -166,6 +204,7 @@ for (const [name, cfg] of candidates) {
     }).join('/');
     process.stdout.write(cell.padStart(22));
   }
-  console.log(`${lag(cfg).toFixed(2)}f`.padStart(9) + `${stillness(cfg).toFixed(2)}px`.padStart(11));
+  console.log(`${lag(cfg).toFixed(2)}f`.padStart(9) + `${stillness(cfg).toFixed(2)}px`.padStart(11)
+    + `${tremorThrough(cfg).toFixed(2)}px`.padStart(10));
 }
 console.log();

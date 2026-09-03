@@ -55,24 +55,38 @@ import { LM, dist, dist3, clamp } from "./vec.js";
 // Measured with `npm run tip`, which is in the repo so this can be re-argued
 // rather than re-remembered:
 //
-//                lag        wobble left     still     drawn in 0.73s
-//   beta 0.015   3.50f 117ms   24.70px      0.00px    2 of 3 runes REFUSED
-//   beta 3       1.40f  47ms    7.11px      0.00px    gravity marginal
-//   beta 6       1.00f  33ms    7.30px      0.00px    gravity marginal
-//   beta 12      0.70f  23ms    7.07px      0.00px    all three cast
-//   beta 24      0.50f  17ms    6.60px      0.00px    (diminishing)
+//                lag        tremor through   still    drawn in 0.73s
+//   beta 0.015   3.50f 117ms     2.66px      0.00px   2 of 3 runes REFUSED
+//   beta 1       2.20f  73ms     2.96px      0.00px   gravity marginal
+//   beta 3       1.40f  47ms     3.35px      0.00px   gravity marginal
+//   beta 6       1.00f  33ms     3.87px      0.00px   gravity marginal
+//   beta 12      0.70f  23ms     4.60px      0.00px   all three cast
+//   no filter    0.00f   0ms    10.25px      2.43px   all three cast
 //
-// Every column improves together up to about 12, which looks wrong until you
-// see why: at low beta the error left on the drawn line is not noise, it is the
-// LAG distorting the shape -- which is also exactly how it was costing
-// recognition. Stillness does not move at any beta, because that is the
-// deadband's column and not this one's.
+// ── The column that had to be added before this could be chosen ──
+//
+// The first version of this measurement modelled the hand's error as per-frame
+// noise, and on that evidence beta 12 looked free: every column improved at
+// once. It shipped, and it was wrong on the glass -- the rune came out jumpy.
+//
+// A hand does not only carry per-frame noise, it carries its own TREMOR: a real
+// low-frequency wander of a few hertz that nobody is choosing to make. minCutoff
+// 1.2 sits below that band, so the old filter removed it; beta raises the cutoff
+// with speed, so a large one lets it straight back in while you draw. beta 12
+// passed 73% more of it than the value it replaced, which is exactly what "too
+// fast" meant. A probe that cannot see tremor will always recommend a filter
+// that passes it.
+//
+// Three is the knee. Lag drops by 60% -- the whole reason to touch this -- for a
+// quarter more tremor, and past it the lag improves slowly while the tremor
+// climbs steadily. Stillness never moves at any beta; that is the deadband's
+// column and not this one's.
 //
 // minCutoff is untouched at 1.2. A hand moving slowly and deliberately gets the
-// same smoothing it always did; only the flick got its 94 milliseconds back.
+// same smoothing it always did; only the flick got most of its lag back.
 export const TIP_FILTER = {
   minCutoff: 1.2,   // lower = smoother when still
-  beta: 12,         // higher = less lag when moving fast. Was 0.015; see above.
+  beta: 3,          // higher = less lag when moving fast, and more tremor.
   dCutoff: 1.0,
   deadband: 0.002,
 };
