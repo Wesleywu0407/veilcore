@@ -58,6 +58,7 @@ npm run share  # start server + temporary trusted HTTPS tunnel for a friend
 npm run test   # node --test, no camera needed
 npm run runes  # how far apart the rune shapes sit
 npm run arm    # replay a mirror recording and check the learned arm length
+npm run tip    # what the wand tip's filter costs in lag, stillness and recognition
 npm run assets # triangles, textures, download size and VRAM per GLB
 ```
 
@@ -96,6 +97,13 @@ classic bundle, so the shape that works is a classic worker doing a dynamic
 **Balance numbers live in `js/arena/config.js`, all of them.** Change values
 there, never at the call site. Same for `js/arena/bow-view.js` (the five bow
 placement numbers) and `DRAW_MIN`/`DRAW_FULL` in `js/spell-room/archery.js`.
+
+**`TIP_FILTER` in `magic.js` is a recognition parameter, not a display one.**
+It is the last thing to touch a rune before the recogniser sees it, and it
+shipped costing about a quarter of the score -- at which two of the three runes
+would not cast if you drew them in under a second. Run `npm run tip` before
+changing it and paste the table into the commit; it prints lag, stillness and
+per-rune recognition at four draw speeds.
 
 **Never lower `TUNE.SCORE_FLOOR` to fix a low recognition rate.** That trades a
 false reject for a false accept, which is the wrong direction — change the rune

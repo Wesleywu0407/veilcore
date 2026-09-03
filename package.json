@@ -12,6 +12,7 @@
     "test": "node scripts/check-refs.mjs && node --test tests/*.test.mjs",
     "runes": "node scripts/rune-distance.mjs",
     "arm": "node scripts/arm-span.mjs",
+    "tip": "node scripts/tip-filter.mjs",
     "assets": "node scripts/glb-info.mjs",
     "refs": "node scripts/check-refs.mjs"
   }

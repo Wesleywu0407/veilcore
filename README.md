@@ -372,6 +372,7 @@ the game. None of these effects casts a shadow.
 npm run test         # 110 tests, no camera needed
 npm run runes        # how far apart the rune shapes sit
 npm run arm <file>   # replay a mirror recording and check the learned arm
+npm run tip          # what the wand tip's filter costs, per draw speed
 npm run assets       # triangles, textures, download size and VRAM per GLB
 ```
 

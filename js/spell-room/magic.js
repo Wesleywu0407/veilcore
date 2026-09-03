@@ -43,9 +43,36 @@ import { LM, dist, dist3, clamp } from "./vec.js";
 // is stiller still and costs three times as much, on the rune that has the
 // least to spare. Half the 0.004 the stroke gate uses, deliberately, so it
 // cannot decide which points get recorded.
+//
+// ── beta was 0.015, and it was doing nothing ──
+//
+// The same discovery the anchor filter made, arriving here later. beta is the
+// ADAPTIVE half: it raises the cutoff in proportion to how fast the hand is
+// going, so it is silent while the hand is slow and does its whole job during
+// a flick. At 0.015 it contributed hundredths of a hertz and the tip ran on
+// minCutoff alone -- 3.5 frames, 117ms, behind the hand.
+//
+// Measured with `npm run tip`, which is in the repo so this can be re-argued
+// rather than re-remembered:
+//
+//                lag        wobble left     still     drawn in 0.73s
+//   beta 0.015   3.50f 117ms   24.70px      0.00px    2 of 3 runes REFUSED
+//   beta 3       1.40f  47ms    7.11px      0.00px    gravity marginal
+//   beta 6       1.00f  33ms    7.30px      0.00px    gravity marginal
+//   beta 12      0.70f  23ms    7.07px      0.00px    all three cast
+//   beta 24      0.50f  17ms    6.60px      0.00px    (diminishing)
+//
+// Every column improves together up to about 12, which looks wrong until you
+// see why: at low beta the error left on the drawn line is not noise, it is the
+// LAG distorting the shape -- which is also exactly how it was costing
+// recognition. Stillness does not move at any beta, because that is the
+// deadband's column and not this one's.
+//
+// minCutoff is untouched at 1.2. A hand moving slowly and deliberately gets the
+// same smoothing it always did; only the flick got its 94 milliseconds back.
 export const TIP_FILTER = {
   minCutoff: 1.2,   // lower = smoother when still
-  beta: 0.015,      // higher = less lag when moving fast
+  beta: 12,         // higher = less lag when moving fast. Was 0.015; see above.
   dCutoff: 1.0,
   deadband: 0.002,
 };

@@ -221,18 +221,30 @@ test("a rune survives its own smoothing, and slower survives better", () => {
   };
 
   for (const rune of RUNES) {
-    // Drawn at an unhurried pace, every rune still casts through its own filter.
+    // Drawn at an unhurried pace, every rune casts through its own filter.
     const slow = walkedAt(rune, 80);
     assert.ok(slow && slow.rune.id === rune.id && slow.ready,
       `${rune.name} does not survive TIP_FILTER even drawn slowly` +
       ` (${slow ? slow.score.toFixed(3) : 'no match'}). The filter's lag rounds` +
       ` the corners off; do not answer this by lowering TUNE.SCORE_FLOOR.`);
 
-    // And the lag is what costs it, so drawing faster must score strictly less.
-    const quick = walkedAt(rune, 33);
-    assert.ok(quick && quick.score < slow.score,
-      `${rune.name} scored no worse drawn twice as fast — TIP_FILTER is not` +
-      ` doing anything, or the walk is not actually faster`);
+    // ── And so does a FLICK, which is the one this is really guarding ──
+    //
+    // Three quarters of a second, which is how fast a rune gets drawn when
+    // something is coming at you. At the beta this filter shipped with -- 0.015,
+    // where the adaptive half did nothing at all -- two of the three runes did
+    // not cast at this speed and nothing in this repo could see it. If this
+    // fails, run `npm run tip`: the answer is in the beta column, not in the
+    // score floor and not in the rune's shape.
+    const flick = walkedAt(rune, 22);
+    assert.ok(flick && flick.rune.id === rune.id && flick.ready,
+      `${rune.name} drawn in 0.73s scored ${flick ? flick.score.toFixed(3) : 'nothing'}` +
+      ` and would not cast. TIP_FILTER's lag is eating the corners.`);
+
+    // The lag is what costs it, so drawing faster must still score less.
+    assert.ok(flick.score < slow.score,
+      `${rune.name} scored no worse drawn nearly four times as fast — either` +
+      ` TIP_FILTER is doing nothing, or the walk is not actually faster`);
   }
 });
 
