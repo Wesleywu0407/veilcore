@@ -16,6 +16,17 @@ export const DUEL = Object.freeze({
   ringfallCooldown: 2.4,
   aegisCost: 24,
   aegisCooldown: 5.5,
+  // How long the shield stands, in seconds: the floor plus what a full charge
+  // adds. It was 1.4 to 3.1 and hardcoded inside castAegis(), which is a
+  // balance number living at the call site -- the one thing AGENTS.md 4 says
+  // this file exists to prevent.
+  //
+  // Raised because 1.4 seconds is barely a shield: with a 5.5 second cooldown
+  // you had to know the rival was already casting before you drew the rune, and
+  // the rune takes about a second to draw. Now a flick buys long enough to draw
+  // something else behind it, and a held cast covers a whole exchange.
+  aegisSeconds: 2.2,
+  aegisSecondsCharged: 2.6,
   gravityCost: 30,
   gravityCooldown: 6.5,
   // The bow is an aimed alternative to Ringfall, so its first balance pass uses

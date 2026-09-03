@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { loadGLB } from './asset-library.js';
+import { DUEL } from './config.js';
 
 const GOLD = 0xffd98a;
 const VIOLET = 0x9b87ff;
@@ -19,7 +20,7 @@ export function createSpellSystem(scene) {
   const outward = new THREE.Vector3();
 
   function castAegis(side, position, power, now) {
-    const duration = 1400 + power * 1700;
+    const duration = (DUEL.aegisSeconds + power * DUEL.aegisSecondsCharged) * 1000;
     state[side].shieldUntil = now + duration;
     shields[side].group.position.copy(position).setY(1.65);
     shields[side].group.visible = true;
