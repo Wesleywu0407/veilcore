@@ -8,7 +8,7 @@ import { buildArena, buildEnvironment } from './arena/scene.js';
 import { DUEL } from './arena/config.js';
 import { createDuelist } from './arena/duelist.js';
 import { fingerCurls, palmBasis, FINGERS } from './spell-room/fingers.js';
-import { createBodyMap, anchorOf } from './spell-room/body-map.js';
+import { createBodyMap, anchorOf, ARM_IN_SPANS } from './spell-room/body-map.js';
 import { createOpponentController } from './arena/opponent.js';
 import { createSpellSystem } from './arena/spell-system.js';
 import { createPerformanceGovernor } from './arena/performance.js';
@@ -1122,6 +1122,17 @@ const BOW_EYE_FOV = 45;    // where the closing-in settles
 // straw. Only the lens changes between the two, so rolling the wrists mid-duel
 // widens the view instead of flying the camera out and back in.
 const FIST_EYE_FOV = 65;
+// ── And the rune hand gets the mirror's lens ──
+//
+// Rune mode used to fall through to BOW_EYE_FOV, so casting in first person was
+// framed through the bow's AIMING lens: 45 degrees, chosen to just fit a bow
+// into shot. Your own hand at arm's length through 45 degrees is roughly twice
+// the size it is through 75, which is why it read as "the hand is jammed
+// against my face" -- the hand was where it should be and the lens was wrong.
+//
+// 75 is the mirror's FIRST_PERSON_FOV, picked there against the reach box so
+// both hands fit in frame. The same body wants the same lens.
+const RUNE_EYE_FOV = 75;
 // The beats of the move, as fractions of the travel. They overlap on purpose:
 // each blend starts before the last has finished, so the look flows down the
 // arm instead of stopping at each joint.
@@ -1177,7 +1188,8 @@ function updateCamera(dt) {
   bowFraming += (wantBow - bowFraming) * Math.min(1, dt * BOW_MOVE_RATE);
   // Eased at the same rate as the move itself, so a wrist roll reads as one
   // gesture rather than as the lens snapping while the body stays put.
-  eyeFov += ((fistMode ? FIST_EYE_FOV : BOW_EYE_FOV) - eyeFov) * Math.min(1, dt * BOW_MOVE_RATE);
+  const wantedFov = fistMode ? FIST_EYE_FOV : bowMode ? BOW_EYE_FOV : RUNE_EYE_FOV;
+  eyeFov += (wantedFov - eyeFov) * Math.min(1, dt * BOW_MOVE_RATE);
 
   // The three things the move looks at on its way in. With the fists up there
   // is no drawn bow, so bowHandWorld hands back the shoulder instead -- which
@@ -1874,6 +1886,27 @@ function drawSelfie(frame) {
       rect.left + 8, rect.top + 29);
     ctx.fillStyle = GOLD;
   }
+
+  // ── The same numbers the mirror prints ──
+  //
+  // "the face is not tracking in the duel" was unanswerable here, because the
+  // duel showed no head reading at all -- the mirror has printed one for a
+  // while and this panel never did. A page that drives the head and cannot say
+  // so is indistinguishable from one that does not drive it.
+  const deg = r => (r * 180 / Math.PI).toFixed(0);
+  ctx.fillStyle = '#7f899f';
+  ctx.fillText(
+    frame.head
+      ? `head ${deg(frame.head.yaw)}° / ${deg(frame.head.pitch)}°`
+        + (frame.head.levelled ? '' : ' · L to level')
+      : 'head — no face',
+    rect.left + 8, rect.top + 43);
+  ctx.fillText(
+    body.arm.widths
+      ? `arm ${body.arm.widths.toFixed(2)}${body.arm.settled ? ' LOCKED' : '…'}`
+      : `arm ${ARM_IN_SPANS} assumed`,
+    rect.left + 8 + 110, rect.top + 43);
+  ctx.fillStyle = GOLD;
   ctx.restore();
 }
 
