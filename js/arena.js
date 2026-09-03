@@ -190,24 +190,31 @@ async function loadMeshyDuelists() {
     const clips = gltf.animations.concat(
       settled.flatMap(result => (result.status === 'fulfilled' ? result.value.animations : [])),
     );
-    // ── The player gets no idle; the rival keeps one ──
+    // ── The player gets NO clips at all; the rival keeps every one ──
     //
-    // An idle clip shifts the weight, swings the free arm and turns the torso
-    // the whole time. On a body that is supposed to BE you, everything it does
-    // on its own is something you are not doing -- it reads as a puppet with
-    // your hands attached, and it is the single loudest reason the duel felt
-    // less like you than the mirror did. The mirror has never loaded a clip.
+    // Full parity with the mirror, which has never loaded a clip. On a body
+    // that is supposed to BE you, everything it does on its own is something
+    // you are not doing: it reads as a puppet with your hands attached, and no
+    // amount of correct tracking survives a torso swaying underneath it.
     //
-    // Only the idle goes. Run, cast and hit stay, because a body that slides
-    // across the floor with still legs is a worse lie than a body that sways.
+    // With no clips duelist.js never builds a mixer, so restPose holds the arms
+    // at bind and the ONLY things that move are the ones being tracked -- arms,
+    // wrists, fingers, head, shoulder girdle. That is the whole claim.
+    //
+    // What it costs, said plainly: the legs no longer walk. Moving with WASD
+    // slides the body across the floor. Cast and hit lose their whole-body
+    // animations too and fall back to the emissive flash, which duelist.js was
+    // already built to survive. That trade was asked for directly, twice; if
+    // the sliding reads worse than the swaying did, the walk cycle comes back
+    // on its own by putting /run|walk/ clips back in this array.
+    //
     // The rival is not you and keeps everything: it should look alive.
     //
     // Clips are immutable data in three.js; each avatar's mixer builds its own
     // bindings, so the two duelists can share one array.
-    const stillClips = clips.filter(clip => !/idle/i.test(clip.name));
-    playerAvatar.replaceVisual(clone(gltf.scene), stillClips);
+    playerAvatar.replaceVisual(clone(gltf.scene), []);
     opponentAvatar.replaceVisual(clone(gltf.scene), clips);
-    setStatus(`Meshy duelist loaded — ${clips.length} clips, ${stillClips.length} on you`);
+    setStatus(`Meshy duelist loaded — ${clips.length} clips on the rival, none on you`);
   } catch (error) {
     playerAvatar.useFallback();
     opponentAvatar.useFallback();
