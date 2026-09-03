@@ -73,18 +73,39 @@ test('a hand resting at your side is no longer a guard', () => {
   assert.equal(hold(input, pair(0)).mode, 'bow', 'an empty hand holds the mode');
 });
 
-test('both hands raised is the guard', () => {
+test('two raised fists are the guard', () => {
   const input = createInputMode();
-  hold(input, pair(1));
-  assert.equal(input.update(at(pair(1), 0.15), SHOULDERS).mode, 'fist');
+  hold(input, pair(0));
+  assert.equal(input.update(at(pair(0), 0.15), SHOULDERS).mode, 'fist');
   assert.ok(input.guarding);
 });
 
-test('the posture beats the number, whatever the number is', () => {
-  // A player holding both hands up is not also showing you a two.
+test('a held-up number beats the posture, because casting IS both hands up', () => {
+  // The rune hand needs the off hand's permission, so every cast has both
+  // hands in the air by design -- and the bow has always been held that way.
+  // A posture that won outright took every one of them for the guard.
   const input = createInputMode();
+  hold(input, pair(1));
+  assert.equal(input.update(at(pair(1), 0.15), SHOULDERS).mode, 'magic');
   hold(input, pair(2));
-  assert.equal(input.update(at(pair(2), 0.15), SHOULDERS).mode, 'fist');
+  assert.equal(input.update(at(pair(2), 0.15), SHOULDERS).mode, 'bow');
+});
+
+test('raised hands that are casting do not report as guarding', () => {
+  // A HUD reads this to say what the hands bought. Both hands are up for every
+  // cast now, so the posture alone would announce a guard over a live rune.
+  const input = createInputMode();
+  hold(input, pair(1));
+  assert.equal(input.update(at(pair(1), 0.15), SHOULDERS).mode, 'magic');
+  assert.equal(input.guarding, false);
+});
+
+test('an unrecognised count still leaves the raised hands to the guard', () => {
+  // Three fingers is not asking for anything, so the posture is the only
+  // statement being made and it stands.
+  const input = createInputMode();
+  hold(input, pair(3));
+  assert.equal(input.update(at(pair(3), 0.15), SHOULDERS).mode, 'fist');
 });
 
 test('one hand up is not a guard', () => {
@@ -147,6 +168,31 @@ test('the sign is readable, so a HUD can show what the hand is asking for', () =
   assert.equal(input.sign, 2);
 });
 
+test('the sign goes when the hand making it does', () => {
+  const input = createInputMode();
+  hold(input, pair(2));
+  assert.equal(input.sign, 2);
+  // The off hand leaves; the right one stays up and carries on drawing.
+  hold(input, [{ side: 'right', landmarks: poseHand({}) }]);
+  assert.equal(input.sign, null, 'a count outlived the hand that was making it');
+});
+
+test('an empty picture leaves no count standing either', () => {
+  const input = createInputMode();
+  hold(input, pair(1));
+  assert.equal(input.sign, 1);
+  hold(input, []);
+  assert.equal(input.sign, null);
+});
+
+test('the count comes back after the hand does', () => {
+  const input = createInputMode();
+  hold(input, pair(1));
+  hold(input, []);
+  hold(input, pair(2));
+  assert.equal(input.sign, 2, 'forgetting the count broke settling a new one');
+});
+
 test('reset forgets the sign as well as the mode', () => {
   const input = createInputMode();
   hold(input, pair(2));
@@ -170,15 +216,32 @@ test('the off hand keeps being read while the guard is up', () => {
   hold(input, pair(2));                                  // bow
   assert.equal(input.sign, 2);
 
-  // Guard, while the off hand quietly changes to a one underneath.
+  // Guard, while the off hand quietly changes to a three underneath. Three
+  // asks for nothing, so the guard keeps the hands -- but the count must move.
   for (let i = 0; i < SIGN_HOLD + 2; i++) {
-    input.update(at(pair(1), 0.15), SHOULDERS);
+    input.update(at(pair(3), 0.15), SHOULDERS);
   }
   assert.equal(input.mode, 'fist', 'still guarding');
-  assert.equal(input.sign, 1, 'but the hand has been read all along');
+  assert.equal(input.sign, 3, 'but the hand has been read all along');
 
-  // Hands down: the mode that comes back is the one being shown NOW.
-  assert.equal(input.update(pair(1)).mode, 'magic');
+  // Hands down: the mode that comes back is the one being shown NOW -- once
+  // the new count has settled, which is the same four frames every count takes.
+  assert.equal(hold(input, pair(1), SIGN_HOLD + 2).mode, 'magic');
+});
+
+test('opening the off hand out of a guard hands the duel straight back', () => {
+  // Both hands are still up -- the fists just became a one. Nothing about
+  // that is a guard any more, and waiting for the hands to come down first
+  // would mean dropping your arms every time you wanted to cast.
+  const input = createInputMode();
+  const guard = () => input.update(at(pair(0), 0.15), SHOULDERS);
+  for (let i = 0; i < SIGN_HOLD + 2; i++) guard();
+  assert.equal(input.mode, 'fist');
+  let last;
+  for (let i = 0; i < SIGN_HOLD + 2; i++) {
+    last = input.update(at(pair(1), 0.15), SHOULDERS);
+  }
+  assert.equal(last.mode, 'magic', 'a one in the air is a cast, not a guard');
 });
 
 test('crossed hands take the mode from the right hand, not the leftmost one', () => {

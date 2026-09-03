@@ -29,7 +29,7 @@
 // state machine runs -- a gate that read that hand's closure would drop out of
 // 'bow' on the release frame and reset the draw before the shot was reported.
 
-import { createSignState, handSign } from './hand-sign.js';
+import { createSignState, forgetSign, handSign } from './hand-sign.js';
 import { handsRaised } from './pose.js';
 
 /**
@@ -65,33 +65,57 @@ export function createInputMode() {
     get mode() { return mode; },
     /** The settled count on the off hand, or null before one has settled. */
     get sign() { return offHand.sign ?? null; },
-    /** True while both hands are up. */
-    get guarding() { return raised; },
+    /**
+     * True while the GUARD is what the raised hands bought.
+     *
+     * Not simply "both hands are up" any more. Both hands are up for every
+     * cast now -- one holding the count, one drawing -- so a HUD reading this
+     * as the posture announced a guard over the top of a rune being drawn.
+     * The posture is a necessary half of the answer and no longer the whole
+     * of it.
+     */
+    get guarding() { return raised && mode === GUARD_MODE; },
     reset() {
       mode = 'magic';
       raised = false;
-      offHand.pending = null;
-      offHand.held = 0;
-      offHand.sign = null;
+      forgetSign(offHand);
     },
     update(hands, pose = null) {
       let next = mode;
 
-      // The posture is read FIRST and wins: it is a whole-body statement, and a
-      // player with both hands up is not also trying to show you a number.
-      raised = handsRaised(hands, pose, raised);
-      if (raised) {
-        // Keep READING the off hand while guarding, and just not act on it.
-        //
-        // Returning here without this froze the sign for as long as the guard
-        // was held: drop your hands after ten seconds and the duel armed
-        // whatever you had been showing before you raised them, not what your
-        // hand is doing now. And because a sign needs SIGN_HOLD frames to
-        // settle, the stale one stayed out for several frames after that -- a
-        // weapon appearing that the player never asked for, at the exact moment
-        // they stopped guarding and most needed to know what they were holding.
-        handSign(offHandOf(hands)?.landmarks ?? null, offHand);
+      // ── No off hand means no count, and it has to SAY so ──
+      //
+      // The count used to simply not be re-read when the off hand was not
+      // there, which left the last settled one standing. Put your off hand
+      // down and the duel still believed you were holding up two: it printed
+      // that on the HUD next to a rune you were drawing, and now that the rune
+      // gate asks the same question, it would have answered for a hand that
+      // was not in the picture.
+      //
+      // Read BEFORE the posture, and always, because the posture now has to
+      // ask what the count is before it can claim the hands. See below.
+      const offHandUp = (hands?.length ?? 0) >= 2 ? offHandOf(hands) : null;
+      if (!offHandUp) forgetSign(offHand);
+      const sign = offHandUp ? handSign(offHandUp.landmarks ?? null, offHand) : null;
 
+      // ── The posture wins, unless the off hand is asking for something ──
+      //
+      // This used to be read first and win outright, on the reasoning that a
+      // player with both hands up is not also trying to show you a number.
+      // That reasoning died the day the rune hand needed permission: the way
+      // you cast is now left hand up holding one, right hand up drawing --
+      // BOTH HANDS UP, every time, by design. Every rune anybody tried to draw
+      // was taken by the guard before the magic branch could run, and the trail
+      // simply never appeared. The bow had the same hole and always had: you
+      // hold a bow with both hands up too.
+      //
+      // So a guard is both hands up and NOTHING ASKED FOR -- which is what two
+      // fists are, since a fist counts zero and zero is not a weapon. It is
+      // still safe from the failure that took the count out of the guard in the
+      // first place, an arm resting at your side reading as a closed hand,
+      // because a resting arm is not raised.
+      raised = handsRaised(hands, pose, raised);
+      if (raised && !SIGN_MODES[sign]) {
         const transition = { mode: GUARD_MODE, previous: mode, changed: GUARD_MODE !== mode };
         mode = GUARD_MODE;
         return transition;
@@ -103,10 +127,11 @@ export function createInputMode() {
         next = 'magic';
       } else if (hands.length === 1) {
         // One hand is the drawing hand by definition -- there is no off hand to
-        // ask, and a bow or a guard needs two anyway.
+        // ask, and a bow or a guard needs two anyway. Whether it is allowed to
+        // DRAW is a separate question, asked of the count: see updateHand().
         next = 'magic';
       } else {
-        const asked = SIGN_MODES[handSign(offHandOf(hands)?.landmarks ?? null, offHand)];
+        const asked = SIGN_MODES[sign];
         // An unrecognised count -- three fingers, or a hand mid-change -- holds
         // whatever is running rather than dumping the player somewhere they did
         // not ask for.

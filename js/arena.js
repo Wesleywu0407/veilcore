@@ -262,6 +262,9 @@ let tracking = false;
 let running = false;
 let worldTime = 0;
 let playerCharging = false;
+// Whether the left hand gave its permission when this stroke began. See the
+// gate in updateHand().
+let castArmed = false;
 // This frame's rune overlay, held until the rig and the camera have caught up.
 // See where it is drawn, at the bottom of step().
 let handLayer = null;
@@ -1505,6 +1508,7 @@ function updateHand(now) {
   if (!tracking) {
     playerCharging = false;
     playerCasting = false;
+    castArmed = false;
     handLayer = null;
     updateDebugBow();
     return;
@@ -1521,6 +1525,7 @@ function updateHand(now) {
   if (mode.mode === 'fist') {
     if (mode.changed) {
       resetMagic();
+      castArmed = false;
       bowState.reset();
       bowAim.reset();
       bowRead = null;
@@ -1547,6 +1552,7 @@ function updateHand(now) {
   if (mode.mode === 'bow') {
     if (mode.changed) {
       resetMagic();
+      castArmed = false;
       bowAim.reset();
       fistMode = false;
       boxing.reset();
@@ -1583,13 +1589,31 @@ function updateHand(now) {
     boxing.reset();
     fistMode = false;
     punchInRange = false;
+    castArmed = false;
     resetMagic();
   }
   // A held shoulder is only good while it is still YOUR shoulder: once the
   // hands are gone the body may be somewhere else by the time they come back.
   if (!frame.tracked) body.forget();
 
-  const gate = isPinching(frame.tracked ? frame.landmarks : null, frame.handScale, now);
+  // ── The left hand says when the right one may draw ──
+  //
+  // A pinch is not permission on its own. The left hand holds up one finger and
+  // the right may then draw; with no one held up, the right hand can pinch all
+  // it likes and nothing opens. That is the whole reason the count exists --
+  // otherwise a hand doing anything at all in front of the lens is a hand
+  // casting, and there is no way to rest.
+  //
+  // Asked at the START of a stroke and not for its whole length. Your off hand
+  // sits at the edge of the picture and drops out of it for a frame or two at a
+  // time; asked continuously, one of those blinks mid-rune would shut the gate,
+  // which does not cancel a cast -- it FIRES it, at whatever was drawn so far.
+  // A rune going off early because your other hand twitched is a worse rule
+  // than the one it enforces. Once open, the pinch alone holds it open.
+  const pinched = isPinching(frame.tracked ? frame.landmarks : null, frame.handScale, now);
+  if (!pinched) castArmed = false;
+  else if (inputMode.sign === 1) castArmed = true;
+  const gate = pinched && castArmed;
   const cast = updateCast(gate && frame.tracked, frame.tip, now);
   const ringfallCharging = cast.phase === 'charging' && cast.rune?.id === 'ringfall';
   playerCharging = cast.phase === 'charging';
@@ -2418,12 +2442,19 @@ function drawHud(now, botState) {
   if (tracking) {
     ctx.fillStyle = GOLD;
     if (inputMode.guarding) {
-      ctx.fillText('BOTH HANDS UP · guard', 24, height - 44);
+      ctx.fillText('BOTH FISTS UP · guard', 24, height - 44);
     } else if (inputMode.sign !== null && SIGN_MODES[inputMode.sign]) {
       ctx.fillText(`OFF HAND ${inputMode.sign} · ${SIGN_MODES[inputMode.sign]}`, 24, height - 44);
+    } else if (!bowMode && !fistMode) {
+      // The rune hand is blocked, and it has to be possible to find out why
+      // from the screen. Without this the rule is invisible: you pinch, you
+      // draw, nothing happens, and nothing anywhere says it is the other hand
+      // that is missing.
+      ctx.fillStyle = '#7f899f';
+      ctx.fillText('LEFT HAND 1 to draw · 2 bow · both fists up guard', 24, height - 44);
     } else {
       ctx.fillStyle = '#7f899f';
-      ctx.fillText('off hand · 1 rune · 2 bow · both hands up guard', 24, height - 44);
+      ctx.fillText('off hand · 1 rune · 2 bow · both fists up guard', 24, height - 44);
     }
   }
   ctx.fillStyle = '#7f899f';

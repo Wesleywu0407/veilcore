@@ -81,3 +81,19 @@ export function handSign(landmarks, state) {
 export function createSignState() {
   return { curls: {}, out: {}, pending: null, held: 0, sign: null };
 }
+
+/**
+ * Forget the count. For when the hand that was making it is GONE, which is a
+ * different thing from a hand that dropped out for a frame -- extendedFingers()
+ * holds through the second on purpose, and this is the first.
+ *
+ * Without it the last settled count outlives the hand: put your off hand down
+ * and the duel still believes you are holding up two, which it will happily
+ * print on the HUD and gate a cast on. The curls are left alone; they are
+ * rebuilt from the next hand that arrives.
+ */
+export function forgetSign(state) {
+  state.pending = null;
+  state.held = 0;
+  state.sign = null;
+}
