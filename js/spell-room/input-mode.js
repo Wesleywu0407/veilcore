@@ -30,7 +30,7 @@
 // 'bow' on the release frame and reset the draw before the shot was reported.
 
 import { createSignState, forgetSign, handSign } from './hand-sign.js';
-import { handsRaised } from './pose.js';
+import { handsRaised, sideOf } from './pose.js';
 
 /**
  * What each count on the off hand asks for.
@@ -54,7 +54,7 @@ export const GUARD_MODE = 'fist';
 
 /** The player's left hand -- by the body where it could say, by x otherwise. */
 const offHandOf = hands =>
-  hands.find(hand => (hand.bodySide ?? hand.side) === 'left') ?? hands[0];
+  hands.find(hand => sideOf(hand) === 'left') ?? hands[0];
 
 export function createInputMode() {
   let mode = 'magic';

@@ -19,7 +19,7 @@
 import { LM, dist } from "./vec.js";
 import {
   readPose, readHead, headPitch, createHeadLevel,
-  sideOfWrist, createSideLatch, createLatch, handsCrossed,
+  sideOfWrist, createSideLatch, createLatch, handsCrossed, sideOf,
 } from "./pose.js";
 import { makeOneEuro, makeSteady } from "./one-euro.js";
 
@@ -225,8 +225,12 @@ function forgetPose() {
 function anchorHands(sides, now) {
   const seen = new Set();
   for (const hand of sides) {
-    // A lone hand has no side; the consumers all read it as the right one.
-    const key = hand.side ?? 'right';
+    // Keyed by the body, so each PHYSICAL hand keeps its own filter through a
+    // crossing. Keyed by x, the two filters swap hands at the frame the wrists
+    // pass each other and each one eases in from where the other hand was --
+    // a snap in the anchor at exactly the moment the arms are moving fastest.
+    // A lone hand nothing could place has no side; consumers read it as right.
+    const key = sideOf(hand) ?? 'right';
     seen.add(key);
     const filter = anchorFilters[key];
     hand.anchor = {
@@ -557,9 +561,15 @@ function applyResult(result) {
   anchorHands(sides, performance.now());
   frame.hands = sides.length ? sides : EMPTY_HANDS;
 
-  // The drawing hand stays whatever it has always been: the only hand when
-  // there is one, and the right hand once there are two.
-  const primary = sides.length === 2 ? sides[1] : sides[0];
+  // The drawing hand: the only hand when there is one, and the RIGHT hand once
+  // there are two -- the player's own right, not the one further right in the
+  // picture. Those are the same hand until you cross your arms, and then they
+  // are not: sides[1] handed the rune over to the left hand mid-duel, silently,
+  // while body-map went on driving the right arm because it asks the body. The
+  // rune then came out of an arm that was not moving.
+  const primary = sides.length === 2
+    ? (sides.find(hand => sideOf(hand) === 'right') ?? sides[1])
+    : sides[0];
   const hand = primary?.landmarks;
   if (!hand) {
     const lostFor = performance.now() - frame.at;

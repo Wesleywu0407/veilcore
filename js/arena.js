@@ -9,6 +9,7 @@ import { DUEL } from './arena/config.js';
 import { createDuelist } from './arena/duelist.js';
 import { FINGERS, FINGER_CHAINS } from './spell-room/fingers.js';
 import { createBodyMap, anchorOf, ARM_IN_SPANS } from './spell-room/body-map.js';
+import { sideOf } from './spell-room/pose.js';
 import { drawFace } from './spell-room/draw-face.js';
 import { createOpponentController } from './arena/opponent.js';
 import { createSpellSystem } from './arena/spell-system.js';
@@ -1931,7 +1932,11 @@ function drawSelfie(frame) {
   for (const hand of hands) {
     const landmarks = hand.landmarks;
     if (!landmarks?.length) continue;
-    const colour = hand.side === 'right' ? GOLD : hand.side === 'left' ? '#8cc9ff' : '#d9e2f2';
+    // Labelled by the body, like everything else that has to survive folded
+    // arms -- a panel that says L over the hand the duel is treating as R is
+    // worse than no label, because it is the panel you go to to find out.
+    const side = sideOf(hand);
+    const colour = side === 'right' ? GOLD : side === 'left' ? '#8cc9ff' : '#d9e2f2';
 
     ctx.beginPath();
     for (const [from, to] of HAND_CONNECTIONS) {
@@ -1960,11 +1965,11 @@ function drawSelfie(frame) {
       ctx.fill();
     }
 
-    if (hand.side) {
+    if (side) {
       ctx.globalAlpha = 1;
       ctx.font = "700 9px 'IBM Plex Mono', monospace";
       ctx.textAlign = 'center';
-      ctx.fillText(hand.side[0].toUpperCase(), x(hand.wrist), y(hand.wrist) + 14);
+      ctx.fillText(side[0].toUpperCase(), x(hand.wrist), y(hand.wrist) + 14);
     }
   }
 
@@ -2118,7 +2123,7 @@ function drawFistLayer(frame, fists) {
   if (frame.hands?.length !== 2) return;
 
   for (const hand of frame.hands) {
-    const state = hand.side === 'left' ? fists.left : fists.right;
+    const state = sideOf(hand) === 'left' ? fists.left : fists.right;
     if (!state?.present) continue;
     const x = hand.wrist.x * width;
     const y = hand.wrist.y * height;

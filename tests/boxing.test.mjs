@@ -153,6 +153,24 @@ test('the two hands punch independently', () => {
   assert.equal(both.right.punched, false);
 });
 
+test('a crossed guard throws the arm the body says, not the one further right', () => {
+  const state = createBoxingState();
+  let now = 1000;
+  // Arms folded: x has them the wrong way round, and the body says so. The
+  // hand the picture calls `left` is the player's RIGHT one.
+  const feed = (bodyRight, bodyLeft) => {
+    now += 1000 / 30;
+    return state.update([
+      { ...hand({ side: 'left', scale: 0.1 * bodyRight }), bodySide: 'right' },
+      { ...hand({ side: 'right', scale: 0.1 * bodyLeft }), bodySide: 'left' },
+    ], now);
+  };
+  for (let i = 0; i < 20; i++) feed(1, 1);
+  const thrown = feed(1.5, 1);
+  assert.equal(thrown.right.punched, true, 'the body said right and the right arm stayed home');
+  assert.equal(thrown.left.punched, false);
+});
+
 test('a hand leaving the frame drops its state', () => {
   const state = createBoxingState();
   drive(state, steady(0.1, 20));

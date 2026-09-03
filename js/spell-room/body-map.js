@@ -14,7 +14,7 @@
 // and each page's player is a different body.
 
 import * as THREE from 'three';
-import { shoulderSpan, createArmSpan } from './pose.js';
+import { shoulderSpan, createArmSpan, sideOf } from './pose.js';
 import { fingerCurls, palmBasis } from './fingers.js';
 import { bodyTracking } from './tracker.js';
 
@@ -256,7 +256,6 @@ export function createBodyMap(avatar) {
     // that only reads `side` hands each arm to the other one the moment you fold
     // them -- an ordinary thing to do, and it looked like the handedness bug
     // coming back.
-    const sideOf = hand => hand.bodySide ?? hand.side;
     const mayGuess = !bodyTracking();
     const unplaced = hands.length === 1 && sideOf(hands[0]) === null;
     if (unplaced && !mayGuess) {

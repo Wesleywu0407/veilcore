@@ -202,6 +202,24 @@ const CROSS_MARGIN = 0.02;
  * there is no body to ask or the two pairings are too close to call, which
  * callers should read as "keep whatever x said".
  */
+/**
+ * Which of the player's sides a hand is on, for anything that must survive
+ * crossed arms.
+ *
+ * `side` is sorted by x and always present; `bodySide` is the same question put
+ * to the BODY, and is the only one of the two that is still right when the
+ * wrists have swapped places. Null when there was no body to ask, which reads
+ * as "keep what x said".
+ *
+ * A function rather than the expression spelled out at each call site, because
+ * it WAS spelled out at each call site: body-map and input-mode had it, the
+ * tracker's own choice of drawing hand did not, and boxing did not. Three
+ * copies of a rule and two places that had never heard of it is exactly the
+ * shape of the bug -- cross your arms and the duel drew with the wrong hand
+ * while the arms it was drawing with knew better.
+ */
+export const sideOf = hand => hand?.bodySide ?? hand?.side ?? null;
+
 export function handsCrossed(low, high, pose) {
   const left = pose?.left?.wrist;
   const right = pose?.right?.wrist;

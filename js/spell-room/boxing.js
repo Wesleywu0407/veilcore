@@ -9,6 +9,7 @@
 // can be tuned against synthetic input before anyone stands up.
 
 import { LM } from "./vec.js";
+import { sideOf } from "./pose.js";
 
 export const BOXING = {
   // ── The roll ──────────────────────────────────────────────────────────────
@@ -164,7 +165,11 @@ export function createBoxingState() {
 
       for (const side of ['left', 'right']) {
         const hand = state[side];
-        const seen = hands?.find(candidate => candidate?.side === side);
+        // The player's own side, not the one further right in the picture: a
+        // guard holds both hands close together in front of you, which is
+        // exactly where x swaps them -- and a swapped guard throws the wrong
+        // arm at the rival. See sideOf().
+        const seen = hands?.find(candidate => sideOf(candidate) === side);
         const scale = seen?.scale;
         hand.punched = false;
 

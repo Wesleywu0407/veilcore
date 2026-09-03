@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { POSE, readPose, elbowHint, sideOfWrist, createSideLatch, createLatch, handsCrossed,
+import { POSE, readPose, elbowHint, sideOfWrist, createSideLatch, createLatch, handsCrossed, sideOf,
   readHead, HEAD_LIMIT, headPitch, createHeadLevel,
   HEAD_PITCH_LIMIT, createArmSpan, handsRaised } from '../js/spell-room/pose.js';
 
@@ -530,4 +530,14 @@ test('but it still takes both hands up to start', () => {
 test('and both hands down to stop', () => {
   const pose = shouldersAt();
   assert.equal(handsRaised(wrists(0.7, 0.7), pose, true), false);
+});
+
+test('sideOf takes the body over x, and x when there is no body', () => {
+  assert.equal(sideOf({ side: 'left', bodySide: 'right' }), 'right');
+  assert.equal(sideOf({ side: 'left', bodySide: null }), 'left');
+  assert.equal(sideOf({ side: 'right' }), 'right');
+  // A hand nothing could place, and no hand at all, are both "no answer" --
+  // callers hold what they had rather than guessing a side.
+  assert.equal(sideOf({ side: null, bodySide: null }), null);
+  assert.equal(sideOf(null), null);
 });
