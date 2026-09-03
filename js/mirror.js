@@ -30,7 +30,7 @@ import {
 
 let trackerOn = true;
 import { fingerCurls, palmBasis, FINGERS } from './spell-room/fingers.js';
-import { shoulderSpan, createArmSpan } from './spell-room/pose.js';
+import { createBodyMap, anchorOf, ARM_IN_SPANS } from './spell-room/body-map.js';
 import { loadGLB } from './arena/asset-library.js';
 
 const GOLD = '#ffd98a';
@@ -202,6 +202,9 @@ function updateCamera() {
 
 // ─── Tracking ─────────────────────────────────────────────────────────────────
 
+// The one implementation of "where does this hand go", shared with the duel.
+const body = createBodyMap(avatar);
+
 let running = false;
 let tracking = false;
 let status = 'idle';
@@ -214,206 +217,11 @@ const readout = { left: null, right: null };
 // the tracking did and never WHY. This is the why.
 let placement = null;
 
-const _handTarget = new THREE.Vector3();
 const _camRight = new THREE.Vector3();
 const _camUp = new THREE.Vector3();
 const _camBack = new THREE.Vector3();
 const _along = { left: new THREE.Vector3(), right: new THREE.Vector3() };
 const _across = { left: new THREE.Vector3(), right: new THREE.Vector3() };
-
-// An arm, measured in shoulder widths, for before the learner has an answer.
-//
-// ── Measured, not derived ──
-//
-// This was 1.55, from anatomy: shoulders about 0.23 of a person's height, arm
-// about 0.33. That is a true fact about people and the wrong number for here,
-// because MediaPipe's shoulder landmarks sit inside the acromion, nearer the
-// neck, so every ratio measured against them runs high -- correctly.
-//
-// The honest readings this rig has actually produced cluster at 1.72-1.85, so
-// the default is the middle of that. It matters more than a default usually
-// does: the learner only ever refines this, and refining needs an arm held out
-// across the frame, which is a thing nobody can do on a train. Starting at the
-// right number means the calibration gesture is optional rather than required.
-//
-// One person's proportions, so it is a sample and not a population -- but it is
-// the right sample, being the person the thing is for.
-const ARM_IN_SPANS = 1.78;
-
-// ...and only until the player's own has been seen. See createArmSpan().
-const armSpan = { left: createArmSpan(), right: createArmSpan() };
-
-/**
- * Where the hand goes: an offset from the player's own shoulder, in arm
- * lengths, rather than a place in the picture.
- *
- * `at` is the hand's smoothed WRIST, not its fingertip: the IK solves for the
- * wrist bone, and hanging the arm off a fingertip both overreached it by a
- * hand's length and turned every finger curl into a shoulder movement.
- *
- * The depth is what is left over. The picture gives two components of a
- * direction and cannot give the third, so take it as the rest of a unit vector:
- * a hand near your shoulder in the picture is one reaching TOWARD the lens, and
- * an arm stretched straight out to the side has no forward in it at all. A
- * fixed forward push -- what the box did -- is wrong at both ends, and at the
- * far end it pushed the target past armReach and clamped.
- *
- * Falls back to the box when there is no body: still absolute, still drifts,
- * but an arm that drifts beats an arm that does not move.
- */
-// ── The last shoulder each arm was measured against ──
-//
-// frame.pose goes null the instant the body model misses a sample -- the body
-// leaves shot, an arm crosses the torso, a shoulder drops under the visibility
-// floor -- and it is sampled at a third of the hands' rate to begin with.
-//
-// Falling back to reachBox() there is not a smaller version of the same answer,
-// it is a DIFFERENT MAPPING: one measures from your shoulder, the other from
-// the middle of the picture. Swapping between them mid-gesture moves the hand
-// by however far your shoulder happens to be from centre, in one frame. That is
-// the hand suddenly flying off -- not drift, a cut.
-//
-// A shoulder that is one sample old is a perfectly good shoulder. Hold it.
-const lastAnchor = { left: null, right: null };
-
-function handTarget(side, at, pose) {
-  const shoulder = pose?.[side]?.shoulder;
-  const shoulders = shoulderSpan(pose);
-  // The learned arm if there is one, the population average until then. Both
-  // are a length in the same units -- the picture -- so the handover when the
-  // learned one arrives is a few percent, not a jump.
-  // Both are in SHOULDER WIDTHS, so multiplying by the CURRENT shoulders is what
-  // makes the mapping survive the player moving toward or away from the lens.
-  // See createArmSpan().
-  //
-  // ── Evidence may raise the default, but not lower it until it has settled ──
-  //
-  // Every reading of an arm that is not held out across the frame is
-  // foreshortened, and reads SHORT. So a learner that has only ever seen
-  // ordinary movement holds a number below the truth -- and taking it over the
-  // default would shrink every movement, which is worse than not learning at
-  // all. That is the state anyone is in who cannot stand up and stick an arm
-  // out, which on a train is everyone.
-  //
-  // Once it has settled it has had a proper look -- three corroborating
-  // readings and forty frames with no growth -- and is then trusted outright,
-  // including when it lands below the default, since some arms are shorter.
-  const rig = armSpan[side];
-  const learned = shoulders ? rig.feed(pose[side], shoulders) : 0;
-  const widths = rig.settled ? learned : Math.max(learned, ARM_IN_SPANS);
-  const scale = shoulders * widths;
-  if (shoulder && scale) lastAnchor[side] = { x: shoulder.x, y: shoulder.y, scale };
-  const held = lastAnchor[side];
-  // Only the very first frames, before any body has ever been seen, take the
-  // box -- and from there it is one-way, so there is nothing to jump between.
-  if (!held) return avatar.reachBox(side, 1 - at.x, at.y, _handTarget);
-
-  // Raw picture offset, shoulder to hand. Both x's un-flip, and the two `1 -`
-  // cancel into the subtraction the other way round.
-  let dx = (held.x - at.x) / held.scale;
-  let dy = -(at.y - held.y) / held.scale;
-
-  // ── Keep the target ON the sphere the hand can reach, never outside it ──
-  //
-  // The depth below is the rest of a unit vector, so as long as the flat part
-  // is within one arm the target lands at exactly armReach and the arm can
-  // always make it. Past one arm the old code just set the depth to zero and
-  // sent the target out anyway -- unreachable. Measured over a sweep of the
-  // reach space: at dx -0.9 the elbow hyperextended to 178 degrees and the hand
-  // finished a quarter of an arm SHORT of where it was sent.
-  //
-  // That is both halves of "the arm looks wrong" at once: a stick where there
-  // should be a bend, and a hand that stops following you. Scaling the flat
-  // part back to one instead makes the mapping saturate at the edge of reach --
-  // the arm straightens out to full extension and stays there, which is what
-  // your own arm does.
-  const flat = Math.hypot(dx, dy);
-  if (flat > 1) { dx /= flat; dy /= flat; }
-  const settled = Math.min(1, flat);
-  const dz = Math.sqrt(1 - settled * settled) * REACH_DEPTH;
-
-  // ── And never all the way out ──
-  //
-  // Mapping your full reach onto the character's full reach sounds right and
-  // looks wrong: a two-bone solver hits armReach with the elbow at 178 degrees,
-  // which is a locked joint, and a locked joint is a stick with a bump in it.
-  // People do not lock their elbows -- even reaching for something at the edge
-  // of your span there is a few degrees left in it, and that little bend is a
-  // surprising amount of what reads as a limb rather than a prop.
-  //
-  // It also keeps the solver off its own singularity, where the bend plane
-  // stops being defined and the elbow can flip between frames on noise alone.
-  return avatar.reachOffset(
-    side, dx * REACH_FULL, dy * REACH_FULL, dz * REACH_FULL, _handTarget);
-}
-
-// How far out the character goes when you are at full stretch. Not 1: see the
-// note in handTarget().
-const REACH_FULL = 0.93;
-
-// How much of the leftover length to spend on depth. Not 1: a hand held at
-// shoulder height in front of you is not at full stretch toward the lens.
-const REACH_DEPTH = 0.85;
-
-/** The point an arm follows. Falls back to the tip if a hand predates anchors. */
-const anchorOf = hand => hand.anchor ?? hand.tip;
-
-// A scratch for turning a body-space direction into a world one.
-const _origin = new THREE.Vector3();
-
-// ── The tracker hands out a MIRROR WORLD, and a mirror world has no chirality ──
-//
-// tracker.js flips x (`1 - x`) on every landmark, so a hand held out to the
-// player's right arrives on the right of the picture. That is the selfie
-// convention, and it is the right one for something you look AT. It is also a
-// reflection: a reflected right hand is congruent to a LEFT hand, so every
-// basis built from those landmarks comes out inside out. The -1 the duel
-// carries in PALM_HANDEDNESS is what has been paying that bill.
-//
-// This is not a mirror in that sense. The character is the player seen from
-// BEHIND -- raise your right hand and its right hand goes up -- so the map from
-// the one body to the other is the identity, and the flip is pure damage. Undo
-// it once, here at the door, and everything below reads a faithful room.
-//
-// Points un-flip as `1 - x`; directions would un-flip as `-x`. Only points are
-// un-flipped, and palmBasis() derives its directions from those, so the file
-// has one rule to keep straight instead of two.
-const _raw = [];
-function unflip(landmarks) {
-  for (let i = 0; i < landmarks.length; i++) {
-    const p = landmarks[i];
-    const q = (_raw[i] ??= { x: 0, y: 0, z: 0 });
-    q.x = 1 - p.x; q.y = p.y; q.z = p.z;
-  }
-  _raw.length = landmarks.length;
-  return _raw;
-}
-
-/**
- * A direction in the raw picture, pointed the same way in the BODY's space.
- *
- * It used to go through the viewing camera, which was left over from before the
- * hand target moved into body space -- so the palm turned when you orbited and
- * the hand did not. Two halves of one gesture in two different frames.
- *
- * The mapping, from un-flipped camera space to the duelist's local axes:
- *
- *   raw +x  the camera's right -> the player's LEFT, so the body's,  local +X
- *   raw +y  down the picture   -> down the body,                     local -Y
- *   raw +z  away from the lens -> behind the player, so the body's,  local -Z
- *
- * Note the determinant: (+1)(-1)(-1) = +1. It is a ROTATION, which is the whole
- * point: a det -1 map turns palmBasis's right-handed triple into a left-handed
- * one, and the rotation pulled out of that is not a rotation of anything real.
- *
- * With the tracker's FLIPPED x, the signs that point the same physical way are
- * (-1)(-1)(-1) = -1. That is the reflection, and it is why the palm kept
- * arriving upside down: not one sign to hunt for, a whole flipped room.
- */
-function trackedDirection(v, out) {
-  out.set(v.x, -v.y, -v.z).normalize();
-  return avatar.root.localToWorld(out).sub(avatar.root.getWorldPosition(_origin));
-}
 
 function driveBody(frame) {
   const hands = frame.hands ?? [];
@@ -421,8 +229,7 @@ function driveBody(frame) {
   // hands are gone the body may be somewhere else entirely by the time they
   // come back, so the hold ends with them rather than outliving them.
   if (!frame.tracked) {
-    lastAnchor.left = lastAnchor.right = null;
-    lastBend.left = lastBend.right = null;
+    body.forget();
   }
   // A lone hand arrives with its real side on it: the body model places it, and
   // a latch holds that answer between body samples. See sideOfWrist().
@@ -473,14 +280,14 @@ function driveBody(frame) {
   // Same side throughout: reach() drives the duelist's RIGHT arm, and the
   // player's RIGHT hand is what feeds it.
   avatar.reach(
-    frame.tracked && right ? handTarget('right', anchorOf(right), frame.pose) : null,
+    frame.tracked && right ? body.handTarget('right', anchorOf(right), frame.pose) : null,
     0,
     false,
-    frame.pose?.right ? elbowTarget('right', frame.pose.right) : null,
+    frame.pose?.right ? body.elbowTarget('right', frame.pose.right) : null,
   );
   avatar.reachLeft(
-    frame.tracked && left ? handTarget('left', anchorOf(left), frame.pose) : null,
-    frame.pose?.left ? elbowTarget('left', frame.pose.left) : null,
+    frame.tracked && left ? body.handTarget('left', anchorOf(left), frame.pose) : null,
+    frame.pose?.left ? body.elbowTarget('left', frame.pose.left) : null,
   );
 
   // The head turns with you. Null hands it back and it eases home, which is
@@ -499,7 +306,7 @@ function driveBody(frame) {
       readout[side] = null;
       continue;
     }
-    const raw = unflip(hand.landmarks);
+    const raw = body.unflip(hand.landmarks);
     const curl = fingerCurls(raw, curls[side]);
     avatar.fingers(side, curl);
 
@@ -507,51 +314,14 @@ function driveBody(frame) {
     if (basis) {
       avatar.palm(
         side,
-        trackedDirection(basis.along, _along[side]),
-        trackedDirection(basis.across, _across[side]),
+        body.direction(basis.along, _along[side]),
+        body.direction(basis.across, _across[side]),
       );
     } else {
       avatar.palm(side, null, null);
     }
     readout[side] = { curl: { ...curl }, palm: Boolean(basis) };
   }
-}
-
-const _elbow = new THREE.Vector3();
-/**
- * Where the elbow wants to be, as a point the solver reads a DIRECTION from.
- *
- * Not the elbow's own place in the picture, and not through reachBox() -- see
- * elbowHint() for why both of those put the elbow in front of the wrist. What
- * goes across is the OFFSET from the tracked shoulder, which is the one thing
- * the body model is genuinely good at: it drops depth constantly, but which way
- * an elbow leans is exactly what it can see.
- */
-// The last bend each arm was given, held for the same reason the shoulder
-// anchor is -- and it is the more urgent of the two.
-//
-// The elbow is the least visible joint on the chain: MediaPipe drops it
-// whenever an arm passes in front of the torso, which is most of casting. When
-// the hint goes, the IK falls back to the constructor's fixed pole, and that
-// pole points DOWN AND BACK -- correct when it was written, with hands held
-// near the chest, and wrong now that the depth model puts them up to 0.85 of an
-// arm out in front. An elbow hinted behind a hand that is far forward is a
-// wrenched arm, and it appears and disappears with the pose.
-//
-// An elbow one sample old is a perfectly good elbow.
-const lastBend = { left: null, right: null };
-
-function elbowTarget(side, arm) {
-  // The offset from the tracked shoulder, in raw picture coordinates: both x's
-  // un-flip, and the two `1 -` cancel into a subtraction the other way round.
-  if (arm?.elbow && arm?.shoulder) {
-    lastBend[side] = {
-      dx: arm.shoulder.x - arm.elbow.x,
-      dy: arm.elbow.y - arm.shoulder.y,
-    };
-  }
-  const held = lastBend[side];
-  return held ? avatar.elbowHint(side, held.dx, held.dy, _elbow) : null;
 }
 
 // ─── Readout ──────────────────────────────────────────────────────────────────
@@ -621,7 +391,7 @@ function drawReadout(frame) {
     // screen rather than felt as "the arm goes too far" with no cause attached.
     // Already in shoulder widths -- no dividing here. Dividing a stored length
     // by the live shoulders is what let this print 1.89 against a 1.85 bound.
-    const rig = armSpan.right;
+    const rig = body.arm;
     const inForce = rig.settled ? rig.widths : Math.max(rig.widths, ARM_IN_SPANS);
     ctx.fillText(
       rig.settled

@@ -8,6 +8,7 @@ import { buildArena, buildEnvironment } from './arena/scene.js';
 import { DUEL } from './arena/config.js';
 import { createDuelist } from './arena/duelist.js';
 import { fingerCurls, palmBasis, FINGERS } from './spell-room/fingers.js';
+import { createBodyMap, anchorOf } from './spell-room/body-map.js';
 import { createOpponentController } from './arena/opponent.js';
 import { createSpellSystem } from './arena/spell-system.js';
 import { createPerformanceGovernor } from './arena/performance.js';
@@ -759,6 +760,9 @@ const _look = new THREE.Vector3();
 const _cameraPosition = new THREE.Vector3();
 const _opponentFacing = new THREE.Vector3();
 
+// The one implementation of "where does this hand go", shared with the mirror.
+const body = createBodyMap(playerAvatar);
+
 // ── The head's level, shared with the mirror ──
 //
 // The same key, the same storage. Pitch self-calibrates from a second of
@@ -1485,14 +1489,30 @@ function updateHand(now) {
     playerAvatar.punch(null);
     resetMagic();
   }
+  // A held shoulder is only good while it is still YOUR shoulder: once the
+  // hands are gone the body may be somewhere else by the time they come back.
+  if (!frame.tracked) body.forget();
+
   const gate = isPinching(frame.tracked ? frame.landmarks : null, frame.handScale, now);
   const cast = updateCast(gate && frame.tracked, frame.tip, now);
   const ringfallCharging = cast.phase === 'charging' && cast.rune?.id === 'ringfall';
+  // ── The same body map the mirror uses ──
+  //
+  // This used to unproject the fingertip through castCamera at a fixed depth,
+  // which is camera-relative: the hand moved when the lens did, had no idea how
+  // long your arm was, and none of the mirror's work reached it. Measured
+  // against your own shoulders instead, the arm means the same thing from
+  // behind, from inside the head, and through every swing the duel's camera
+  // makes. See js/spell-room/body-map.js.
+  const runeHand = frame.hands?.find(h => (h.bodySide ?? h.side) === 'right')
+    ?? (frame.hands?.length === 1 ? frame.hands[0] : null);
   playerAvatar.reach(
-    gate && frame.tracked ? handTarget(frame.tip) : null,
+    gate && frame.tracked && runeHand
+      ? body.handTarget('right', anchorOf(runeHand), frame.pose)
+      : null,
     cast.charge,
     !ringfallCharging,
-    elbowTarget(frame.pose?.right),
+    body.elbowTarget('right', frame.pose?.right),
   );
   drivePalms(frame);
   playerCharging = cast.phase === 'charging';
@@ -1528,7 +1548,7 @@ function updateSimulatedCharge(dt, now) {
   simCharge = clamp(simCharge + dt / (TUNE.CHARGE_FULL_MS / 1000), TUNE.CHARGE_MIN, 1);
   // Park the camera-free QA hand clear of the head, so N actually exposes the
   // held model it exists to inspect. Live tracking still uses the real tip.
-  playerAvatar.reach(handTarget({ x: 0.68, y: 0.42 }), simCharge, false);
+  playerAvatar.reach(simHand(), simCharge, false);
   updateHaloCharge(true, simCharge);
   void now;
 }
@@ -1837,46 +1857,24 @@ function drawSelfie(frame) {
   ctx.restore();
 }
 
-// Where the duelist's hand has to be in the world for it to appear exactly under
-// the stroke the player is watching. Unprojecting the fingertip is the only way
-// the two line up: the earlier version mapped the stroke onto a small square in
-// front of the chest, and the hand ended up somewhere with no visible relation
-// to the line being drawn. HAND_DEPTH is a little under the arm's own span, so
-// the elbow keeps a bend instead of locking straight.
-const HAND_DEPTH = 1.47;
-const _handTarget = new THREE.Vector3();
-
-function handTarget(tip) {
-  _handTarget.set(tip.x * 2 - 1, -(tip.y * 2 - 1), 0.5).unproject(castCamera);
-  return _handTarget.sub(castCamera.position).normalize()
-    .multiplyScalar(HAND_DEPTH).add(castCamera.position);
-}
-
-// The player's own elbow, put through the same lens as their fingertip.
+// ── What the unprojection bought, and what replaced it ──
 //
-// Deliberately the SAME depth as the hand rather than a shorter one of its own,
-// and not because a second constant would be tedious -- because the shared
-// depth is what makes this correct.
+// The hand used to be unprojected through castCamera so it appeared exactly
+// under the rune stroke on screen. That correspondence was real and it is now
+// gone: measuring against your own shoulders means the hand is where YOUR hand
+// is, which is not necessarily under a line drawn in screen space.
 //
-// Both points land on one sphere around the camera, so the elbow minus the
-// wrist is a purely sideways offset: exactly the screen-space gap between them,
-// carried into the world. The IK then throws away everything along the
-// shoulder-to-wrist line before using the hint, and what is left of
-// `elbow - shoulder` after that is precisely that sideways offset. The bogus
-// forward depth cancels out of the only quantity anybody reads.
-//
-// Which is also the honest limit of this: the body model is being asked which
-// SIDE of the arm the elbow sticks out on, which is what a camera can actually
-// see, and never how far away it is, which is what it cannot.
-const _elbowTarget = new THREE.Vector3();
+// It goes because the trade turned: a hand that tracks your body correctly in
+// every camera, at the right scale for your arm, is worth more than a hand that
+// sits under a stroke. The stroke is being redefined anyway.
 
-function elbowTarget(arm) {
-  const elbow = arm?.elbow;
-  if (!elbow) return null;
-  _elbowTarget.set(elbow.x * 2 - 1, -(elbow.y * 2 - 1), 0.5).unproject(castCamera);
-  return _elbowTarget.sub(castCamera.position).normalize()
-    .multiplyScalar(HAND_DEPTH).add(castCamera.position);
-}
+// ── The keyboard cast's hand ──
+//
+// J/K cast with no camera, so there is nothing to measure against a shoulder --
+// the hand simply goes where a cast holds it. Body-relative like everything
+// else, in arm lengths, so it lands in the same place on any rig.
+const _simHand = new THREE.Vector3();
+const simHand = () => playerAvatar.reachOffset('right', -0.25, 0.22, 0.62, _simHand);
 
 // What the player's own fingers are doing, handed to the duelist's hands.
 //
