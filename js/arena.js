@@ -1194,7 +1194,19 @@ function updateCamera(dt) {
   const stanceEye = bowMode || fistMode;
   const plainEye = forcedEye && !stanceEye;
   const eyeMode = stanceEye || plainEye;
-  const wantCast = playerAvatar.reaching && !eyeMode ? 1 : 0;
+  // ── No cast shot while there is no cast ──
+  //
+  // This was `playerAvatar.reaching`, which meant "the rune gate has the arm".
+  // The arm now follows you whenever you are tracked at all, so `reaching` is
+  // true essentially always -- and the camera sat permanently in the close,
+  // wide, offset casting shot, in every mode, for the whole match. A regression
+  // I introduced by freeing the arm without noticing the camera was reading it
+  // as a cast.
+  //
+  // With the skills out of the loop there is nothing to frame. When they come
+  // back this wants to key off the cast's own state, not off whether the arm
+  // happens to be moving. See updateHand().
+  const wantCast = 0;
   const wantBow = eyeMode ? 1 : 0;
   castFraming += (wantCast - castFraming) * Math.min(1, dt * 9);
   bowFraming += (wantBow - bowFraming) * Math.min(1, dt * BOW_MOVE_RATE);
