@@ -57,6 +57,7 @@ npm run dev:https
 npm run share  # start server + temporary trusted HTTPS tunnel for a friend
 npm run test   # node --test, no camera needed
 npm run runes  # how far apart the rune shapes sit
+npm run arm    # replay a mirror recording and check the learned arm length
 npm run assets # triangles, textures, download size and VRAM per GLB
 ```
 

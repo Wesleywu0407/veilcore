@@ -284,9 +284,14 @@ Open:
   the fingertip by a constant amount, that is the correction; if it is the wrong
   SIZE, that is the arm, and the arm prints its own measurement on the panel.
 - **The arm should settle around 1.75–1.85 shoulder widths.** The self panel
-  prints `arm N.NN LOCKED`. Well above that band means something is still
-  feeding it bad frames, and everything measured off the arm — the rune's size
-  included — is that far out with it.
+  prints `arm N.NN LOCKED`. Above that band, everything measured off the arm —
+  the rune's size included — is out with it. Do not judge it from the panel:
+  the learner seeks a maximum and never comes down, so it sits wherever the
+  noise reaches. Record 8 seconds with **R** in the mirror and run
+  `npm run arm <file>`, which prints the whole distribution beside what the
+  learner locked onto. A synthetic 1.80 arm with a centimetre of jitter on the
+  elbow locks at 1.90, so a panel reading near there is a normal arm through a
+  noisy chain and not a long one.
 - **The practice-range placement still wants a human eye** — `BOW_LENGTH`,
   `PRACTICE_BOW_MOUNT`, `NOCK_TRAVEL`, and `ARROW_LENGTH` in
   `js/arena/bow-view.js`. The duel has its own body-space mount and its right-
@@ -366,6 +371,7 @@ the game. None of these effects casts a shadow.
 ```bash
 npm run test         # 110 tests, no camera needed
 npm run runes        # how far apart the rune shapes sit
+npm run arm <file>   # replay a mirror recording and check the learned arm
 npm run assets       # triangles, textures, download size and VRAM per GLB
 ```
 
