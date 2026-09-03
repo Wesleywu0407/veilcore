@@ -448,7 +448,23 @@ const ARM_SPAN_SANE = 1.95;
 const ARM_SPAN_SETTLES_AFTER = 40;   // accepted readings with no real growth
 const ARM_SPAN_GROWTH = 1.01;        // 1% -- anything less is noise, not an arm
 
+// ── One frame must not be able to set the scale ──
+//
+// A plain maximum takes the single longest reading ever seen, which is by
+// definition the frame where the model was most wrong in the generous
+// direction. That was survivable while the value could still decay; it stopped
+// being survivable when the value started being FROZEN, because now the worst
+// frame of the first few seconds is the scale for the rest of the session.
+// Observed locking at 1.91 where the honest readings were 1.73-1.85.
+//
+// So the scale is the third-largest reading rather than the largest: one or two
+// generous frames cannot lift it, three consistent ones can. Still a maximum in
+// spirit -- foreshortening only ever reads SHORT, so the long end is still
+// where the truth is -- just not a maximum that one bad frame can reach.
+const ARM_SPAN_CORROBORATION = 3;
+
 export function createArmSpan() {
+  let best = [];        // the longest few readings, descending
   let widths = 0;
   let quiet = 0;
   let settled = false;
@@ -477,15 +493,24 @@ export function createArmSpan() {
       const ratio = (upper + fore) / shoulders;
       if (!(ratio > 0) || ratio > ARM_SPAN_SANE) return widths;
 
-      if (ratio > widths * ARM_SPAN_GROWTH) {
-        widths = ratio;        // a genuinely longer look at the arm
+      // Keep the longest few and take the last of them, so the scale is a
+      // reading three frames agreed on rather than the one that went furthest.
+      best.push(ratio);
+      best.sort((a, b) => b - a);
+      best = best.slice(0, ARM_SPAN_CORROBORATION);
+      const corroborated = best.length === ARM_SPAN_CORROBORATION
+        ? best[ARM_SPAN_CORROBORATION - 1]
+        : 0;
+
+      if (corroborated > widths * ARM_SPAN_GROWTH) {
+        widths = corroborated;      // a genuinely longer look at the arm
         quiet = 0;
       } else {
-        widths = Math.max(widths, ratio);
+        widths = Math.max(widths, corroborated);
         if (++quiet >= ARM_SPAN_SETTLES_AFTER) settled = true;
       }
       return widths;
     },
-    reset() { widths = 0; quiet = 0; settled = false; },
+    reset() { best = []; widths = 0; quiet = 0; settled = false; },
   };
 }

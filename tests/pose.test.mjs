@@ -365,9 +365,10 @@ test('the longest arm seen is the one believed', () => {
   // There is no honest way to read too long, which is why max beats average.
   const span = createArmSpan();
   span.feed(arm(0.10, 0.09), 0.16);          // arm angled toward the lens
-  span.feed(arm(0.15, 0.13), 0.16);          // across the frame: the true one
   span.feed(arm(0.06, 0.05), 0.16);          // pointing at the camera
-  // 0.28 / 0.16 = 1.75 widths, exactly: the maximum is kept, not averaged.
+  // Three times across the frame -- one is no longer enough to set the scale.
+  for (let i = 0; i < 3; i++) span.feed(arm(0.15, 0.13), 0.16);
+  // 0.28 / 0.16 = 1.75 widths, exactly: the long end is kept, not averaged.
   assert.ok(Math.abs(span.widths - 1.75) < 1e-9, `held ${span.widths.toFixed(3)}`);
   assert.ok(span.widths > 1.2, 'and nowhere near the foreshortened readings');
 });
@@ -420,7 +421,7 @@ test('but it keeps learning while the arm is still growing', () => {
   const span = createArmSpan();
   for (let i = 0; i < 30; i++) span.feed(arm(0.08, 0.07), 0.16);   // arm toward the lens
   assert.ok(!span.settled, 'thirty frames of one pose is not a whole arm');
-  span.feed(arm(0.15, 0.13), 0.16);                                // finally across the frame
+  for (let i = 0; i < 3; i++) span.feed(arm(0.15, 0.13), 0.16);    // finally across the frame
   assert.ok(Math.abs(span.widths - 1.75) < 0.01, `took ${span.widths.toFixed(3)}`);
 });
 
@@ -450,4 +451,20 @@ test('and moving mid-session does not rescale what was already learned', () => {
   const seated = span.widths;
   for (let i = 0; i < 5; i++) span.feed(arm(0.30, 0.26), 0.32);   // leans in
   assert.ok(Math.abs(span.widths - seated) < 1e-9, 'the ratio is the same ratio');
+});
+
+test('one generous frame cannot set the scale, and three can', () => {
+  // The risk the freeze introduced. A plain maximum takes the single longest
+  // reading ever seen -- by definition the frame the model got most wrong in
+  // the generous direction -- and freezing then makes that frame permanent.
+  // Observed locking at 1.91 where the honest readings were 1.73-1.85.
+  const span = createArmSpan();
+  for (let i = 0; i < 20; i++) span.feed(arm(0.15, 0.13), 0.16);   // 1.75, honest
+  const honest = span.widths;
+  span.feed(arm(0.16, 0.14), 0.16);                                // 1.88, one bad frame
+  assert.equal(span.widths, honest, 'a single outlier must not lift it');
+  span.feed(arm(0.16, 0.14), 0.16);
+  assert.equal(span.widths, honest, 'nor two');
+  span.feed(arm(0.16, 0.14), 0.16);
+  assert.ok(span.widths > honest, 'but three consistent readings are an arm');
 });
