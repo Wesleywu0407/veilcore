@@ -180,6 +180,34 @@ export function createBodyMap(avatar) {
     return _raw;
   }
 
+  /**
+   * Where a point in PICTURE space lands in the world, on the sphere this arm
+   * can reach. The pure half of handTarget(): the same maths against the same
+   * held anchor, but it neither feeds the arm-span learner nor moves the
+   * anchor, so it can be asked about a point that is not the live hand.
+   *
+   * That distinction is the whole reason it exists. The rune stroke asks this
+   * question of every point in the stroke on a single frame -- forty of them,
+   * all of the same instant -- and every one would otherwise arrive at the
+   * learner as another arm measurement. A constant measured forty times a frame
+   * from one pose is not measured any more. See AGENTS.md 5.
+   *
+   * Null before a shoulder has ever been seen: there is nothing to place a
+   * point against, and a guess here would be a body, not a measurement.
+   */
+  function handAt(side, at, out = _handTarget) {
+    const held = lastAnchor[side];
+    if (!held) return null;
+    let dx = (held.x - at.x) / held.scale;
+    let dy = -(at.y - held.y) / held.scale;
+    const flat = Math.hypot(dx, dy);
+    if (flat > 1) { dx /= flat; dy /= flat; }
+    const settled = Math.min(1, flat);
+    const dz = Math.sqrt(1 - settled * settled) * REACH_DEPTH;
+    return avatar.reachOffset(
+      side, dx * REACH_FULL, dy * REACH_FULL, dz * REACH_FULL, out);
+  }
+
   function handTarget(side, at, pose) {
     const shoulder = pose?.[side]?.shoulder;
     const shoulders = shoulderSpan(pose);
@@ -188,17 +216,7 @@ export function createBodyMap(avatar) {
     const widths = rig.settled ? learned : Math.max(learned, ARM_IN_SPANS);
     const scale = shoulders * widths;
     if (shoulder && scale) lastAnchor[side] = { x: shoulder.x, y: shoulder.y, scale };
-    const held = lastAnchor[side];
-    if (!held) return avatar.reachBox(side, 1 - at.x, at.y, _handTarget);
-
-    let dx = (held.x - at.x) / held.scale;
-    let dy = -(at.y - held.y) / held.scale;
-    const flat = Math.hypot(dx, dy);
-    if (flat > 1) { dx /= flat; dy /= flat; }
-    const settled = Math.min(1, flat);
-    const dz = Math.sqrt(1 - settled * settled) * REACH_DEPTH;
-    return avatar.reachOffset(
-      side, dx * REACH_FULL, dy * REACH_FULL, dz * REACH_FULL, _handTarget);
+    return handAt(side, at) ?? avatar.reachBox(side, 1 - at.x, at.y, _handTarget);
   }
 
   function elbowTarget(side, arm) {
@@ -331,6 +349,7 @@ export function createBodyMap(avatar) {
      */
     drive,
     unflip,
+    handAt,
     handTarget,
     elbowTarget,
     direction,

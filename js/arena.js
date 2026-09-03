@@ -262,6 +262,9 @@ let tracking = false;
 let running = false;
 let worldTime = 0;
 let playerCharging = false;
+// This frame's rune overlay, held until the rig and the camera have caught up.
+// See where it is drawn, at the bottom of step().
+let handLayer = null;
 // Whether a rune is actually being drawn right now. The camera frames a cast
 // off THIS and not off `playerAvatar.reaching`: the arm follows you whenever
 // you are tracked at all, so reaching is true nearly always. See updateCamera.
@@ -1502,6 +1505,7 @@ function updateHand(now) {
   if (!tracking) {
     playerCharging = false;
     playerCasting = false;
+    handLayer = null;
     updateDebugBow();
     return;
   }
@@ -1528,6 +1532,7 @@ function updateHand(now) {
     bowMode = false;
     fistMode = true;
     playerCasting = false;
+    handLayer = null;
     const fists = boxing.update(frame.hands, now);
     punchInRange = opponentInPunchRange();
     // A raised guard is not a telegraph. Leaving this on would have the rival
@@ -1548,6 +1553,7 @@ function updateHand(now) {
     }
     bowMode = true;
     playerCasting = false;
+    handLayer = null;
     bowRead = bowState.update(frame.hands, now);
     playerCharging = bowRead.phase === 'nocked' && bowRead.draw > 0.2;
     bowStringSide = bowRead.stringSide ?? bowStringSide;
@@ -1602,7 +1608,7 @@ function updateHand(now) {
     flashUntil = now + 240;
     flashKind = 'fizzle';
   }
-  drawHandLayer(frame, gate, cast);
+  handLayer = { frame, gate, cast };
 }
 
 
@@ -1832,6 +1838,15 @@ function step(now) {
     perfTime = 0;
     perfFrames = 0;
   }
+  // ── The rune, drawn last, because it is hung off things that move ──
+  //
+  // Every mark on this layer is placed through the rig's own fingertip and the
+  // duel's camera, and neither of those is this frame's yet when the hand is
+  // read: playerAvatar.update() and updateCamera() both run after updateHand().
+  // Drawn there, the whole stroke sat one frame behind the arm it belongs to --
+  // which is nothing while the hand is still and a hand's width while it moves,
+  // and it moves for the entire length of a rune.
+  if (handLayer) drawHandLayer(handLayer.frame, handLayer.gate, handLayer.cast);
   drawHud(now, botState);
   drawSelfie(getFrame());
 }
@@ -1986,16 +2001,80 @@ function drawSelfie(frame) {
   ctx.restore();
 }
 
-// ── What the unprojection bought, and what replaced it ──
+// ── What the unprojection bought, and how it was bought back ──
 //
 // The hand used to be unprojected through castCamera so it appeared exactly
-// under the rune stroke on screen. That correspondence was real and it is now
-// gone: measuring against your own shoulders means the hand is where YOUR hand
-// is, which is not necessarily under a line drawn in screen space.
+// under the rune stroke on screen. That correspondence was real and it went
+// when the arm moved to body-map: measuring against your own shoulders means
+// the hand is where YOUR hand is, which is not necessarily under a line drawn
+// in screen space. Nobody saw the two disagree, because the skills came out of
+// the loop in the same stretch. Wire them back and it is the first thing you
+// see -- a rune hanging in the middle of the screen while the hand drawing it
+// is off at the edge.
 //
-// It goes because the trade turned: a hand that tracks your body correctly in
-// every camera, at the right scale for your arm, is worth more than a hand that
-// sits under a stroke. The stroke is being redefined anyway.
+// It is bought back at the other end now. The arm stays where the body says,
+// and the STROKE moves: it is drawn shifted so its live end sits on the rig's
+// own fingertip, the same point the halo already gathers at. Presentation only
+// -- currentStroke() still hands recognize() the raw tip-space points, so
+// nothing here can move a recognition score.
+//
+// What the shift cannot fix is scale. The stroke is tip space stretched over
+// the window; the hand is a body measured in metres and projected. They move
+// together but not by the same number of pixels, so a big rune breathes a
+// little against the fingertip. Anchoring the live end is what makes the rune
+// read as yours; matching the two scales is a bigger change than that is worth
+// until it is a complaint.
+const _strokeTip = new THREE.Vector3();
+const _strokePoint = new THREE.Vector3();
+
+/**
+ * A point of the stroke, put where the hand that drew it would have been.
+ *
+ * Straight through body-map's own picture-to-world mapping -- the one that
+ * places the arm -- and then through the duel's camera. So the rune is drawn
+ * on the sphere your arm can actually reach: at your arm's measured length,
+ * foreshortened by the lens that is looking at it, and swinging with the
+ * camera like the thing it is attached to.
+ *
+ * The alternative was to keep drawing in tip space and scale it by some
+ * number until it looked right. That number would have been a guess about an
+ * arm this file already knows the length of.
+ *
+ * Null when the point cannot be placed -- no shoulder seen yet, or behind the
+ * lens -- and the caller falls back to flat tip space, which is where all of
+ * this drew before.
+ */
+function strokeScreen(at, out) {
+  if (!body.handAt('right', at, _strokePoint)) return null;
+  _strokePoint.project(camera);
+  if (_strokePoint.z > 1) return null;
+  out[0] = (_strokePoint.x * 0.5 + 0.5) * innerWidth;
+  out[1] = (-_strokePoint.y * 0.5 + 0.5) * innerHeight;
+  return out;
+}
+
+/**
+ * The last correction: hand target to FINGERTIP.
+ *
+ * strokeScreen() places a point where the hand goes, and the hand goes where
+ * the IK wrist target is -- which is a hand's length short of the finger the
+ * rune is coming out of. Rather than guess that length, it is measured on the
+ * frame: the gap on screen between the live tip mapped as a hand and the rig's
+ * own fingertip, which is the same point the halo gathers at. The whole stroke
+ * moves by it, so the pen ends up at the pen's tip.
+ */
+function tipCorrection(frame, out) {
+  out[0] = 0;
+  out[1] = 0;
+  if (!playerAvatar.fingertipWorld(_strokeTip)) return out;
+  _strokeTip.project(camera);
+  if (_strokeTip.z > 1) return out;
+  const hand = strokeScreen(frame.tip, [0, 0]);
+  if (!hand) return out;
+  out[0] = (_strokeTip.x * 0.5 + 0.5) * innerWidth - hand[0];
+  out[1] = (-_strokeTip.y * 0.5 + 0.5) * innerHeight - hand[1];
+  return out;
+}
 
 // ── The fingers, the palms and the arms all live in body-map.js now ──
 //
@@ -2093,8 +2172,22 @@ function drawBowLayer(frame, bow) {
   ctx.restore();
 }
 
+const _fix = [0, 0];
+const _screen = [0, 0];
+
 function drawHandLayer(frame, gate, cast) {
   if (!frame.tracked) return;
+  const fix = tipCorrection(frame, _fix);
+  // One projector for every mark on this layer, so the stroke, the preview and
+  // the cursor cannot end up in three different places. Flat tip space is the
+  // fallback, and it is what all of this did before there was a body to hang
+  // it on.
+  const put = at => {
+    const world = strokeScreen(at, _screen);
+    return world
+      ? [world[0] + fix[0], world[1] + fix[1]]
+      : [at.x * innerWidth, at.y * innerHeight];
+  };
   const points = currentStroke();
   if (points.length > 1) {
     const swell = 1 + (cast.phase === 'charging' ? cast.charge : 0) * 1.4;
@@ -2104,8 +2197,12 @@ function drawHandLayer(frame, gate, cast) {
     // midpoints costs nothing and removes the faceting. This is presentation
     // only -- currentStroke() still hands recognize() the raw points, so nothing
     // here can move a recognition score.
-    const px = i => points[i].x * innerWidth;
-    const py = i => points[i].y * innerHeight;
+    // Projected once each, not once per pass: three strokes over the same
+    // forty points is a hundred and twenty camera projections a frame for a
+    // line that has not moved between them.
+    const screen = points.map(put);
+    const px = i => screen[i][0];
+    const py = i => screen[i][1];
     for (const pass of [{ width: 18, alpha: 0.12 }, { width: 8, alpha: 0.32 }, { width: 2.4, alpha: 1 }]) {
       ctx.beginPath();
       ctx.moveTo(px(0), py(0));
@@ -2123,8 +2220,7 @@ function drawHandLayer(frame, gate, cast) {
     ctx.globalAlpha = 1;
   }
 
-  const x = frame.tip.x * innerWidth;
-  const y = frame.tip.y * innerHeight;
+  const [x, y] = put(frame.tip);
 
   // Live verdict while the stroke is still being drawn. Recognition only ever
   // spoke at the end, so a stroke going wrong looked exactly like a stroke that
