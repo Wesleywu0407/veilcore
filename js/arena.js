@@ -1369,6 +1369,10 @@ function updateHand(now) {
   // posture measured against the shoulder line rather than a count of fingers.
   const mode = inputMode.update(frame.hands, frame.pose);
 
+  // Before the branches, because every one of them returns: fingers belong to
+  // the player in all three modes. See driveFingers().
+  driveFingers(frame);
+
   if (mode.mode === 'fist') {
     if (mode.changed) {
       resetMagic();
@@ -1449,7 +1453,7 @@ function updateHand(now) {
     !ringfallCharging,
     elbowTarget(frame.pose?.right),
   );
-  driveFingers(frame);
+  drivePalms(frame);
   playerCharging = cast.phase === 'charging';
   // The ring forms at the hand while the charge is held, and only then goes.
   // Ringfall only: Aegis and Gravity Seal are not this shape and borrowing the
@@ -1862,28 +1866,61 @@ function trackedDirection(v, out) {
     .normalize();
 }
 
+/**
+ * Which of the player's hands drives this side of the duelist.
+ *
+ * One hand in shot is the drawing hand, and in the duel the drawing hand is the
+ * RIGHT one by construction -- reach() moves the right arm for it whichever of
+ * the player's hands it physically is. So its fingers have to be the right
+ * hand's too, or the duel animates one hand's fingers on the end of the other
+ * one's arm.
+ *
+ * With two, `bodySide` where the body could tell and x otherwise. Two hands
+ * held close together -- a guard -- is where x swaps on noise alone.
+ */
+function handFor(hands, side) {
+  return hands.length === 1
+    ? (side === 'right' ? hands[0] : null)
+    : (hands.find(h => (h.bodySide ?? h.side) === side) ?? null);
+}
+
+/**
+ * The finger bones, in EVERY mode.
+ *
+ * This used to live below the mode branches, all of which return before
+ * reaching it -- so fingers moved while drawing a rune and were frozen solid
+ * the moment you picked up the bow or put your fists up. Two thirds of the game
+ * had a hand carved out of one piece, which reads as a model without finger
+ * joints rather than as a missing call.
+ *
+ * Fingers are safe to drive everywhere precisely because nothing else touches
+ * them: they are the thirty bones added after the fact, so no clip animates
+ * them and neither drawBow() nor punch() poses them. Your fingers are attached
+ * to your hands whatever you are holding.
+ */
 function driveFingers(frame) {
   if (!playerAvatar.hasFingers) return;
   const hands = frame.hands ?? [];
   for (const side of ['left', 'right']) {
-    // One hand in shot is the drawing hand, and in the duel the drawing hand is
-    // the RIGHT one by construction -- reach() moves the right arm for it
-    // whichever of the player's hands it physically is. So its fingers have to
-    // be the right hand's too, or the duel animates one hand's fingers on the
-    // end of the other one's arm.
-    //
-    // This used to key off `side === null`, which held only while a lone hand
-    // could not be placed at all. The body model can place one now, so a player
-    // casting left-handed would arrive here labelled 'left'. The count is the
-    // sturdier test, and it says what the rule actually is.
-    const hand = hands.length === 1
-      ? (side === 'right' ? hands[0] : null)
-      // `bodySide` where the body could tell, x otherwise. Two hands held close
-      // together -- a guard -- is where x swaps on noise alone, and swapping
-      // here animates one hand's fingers on the end of the other one's arm.
-      : (hands.find(h => (h.bodySide ?? h.side) === side) ?? null);
+    const hand = handFor(hands, side);
     playerAvatar.fingers(side, hand ? fingerCurls(hand.landmarks, _curls[side]) : null);
+  }
+}
 
+/**
+ * The wrist, in the RUNE mode only.
+ *
+ * Unlike the fingers this overrides the hand BONE, which the bow and the fists
+ * both care about: a bow is gripped at a particular angle and a fist wants to
+ * line up with its own forearm. Letting the tracked palm win there would twist
+ * the hand off the bow. So the wrist stays where those poses put it, and only
+ * the drawing hand is handed over.
+ */
+function drivePalms(frame) {
+  if (!playerAvatar.hasPalm) return;
+  const hands = frame.hands ?? [];
+  for (const side of ['left', 'right']) {
+    const hand = handFor(hands, side);
     // Only two directions are carried across, never the palm normal: the
     // tracker's space is mirrored and the duelist's is not, so a normal would
     // arrive pointing out of the wrong side of the hand. The duelist crosses
