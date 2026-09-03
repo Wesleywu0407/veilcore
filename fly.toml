@@ -1,0 +1,45 @@
+# Veilcore on Fly. Rename `app` before the first deploy -- it has to be unique
+# across Fly, and `flyctl launch` will offer to pick one for you.
+app = "veilcore"
+primary_region = "sin"          # nearest to you; `flyctl platform regions` lists the rest
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Fly does NOT inject PORT the way Heroku and Render do -- it routes to
+  # `internal_port` and leaves the process to know its own. Set here so the two
+  # cannot drift: duel-server.mjs reads PORT first, and this is that PORT.
+  PORT = "5174"
+
+[http_service]
+  internal_port = 5174
+  force_https = true            # getUserMedia does not exist without it
+
+  # ── Why this machine may not sleep ──
+  #
+  # duel-rooms.mjs keeps its rooms in a plain Map in one process. A machine that
+  # stops loses every open room, and a machine that has to cold-start makes the
+  # first visitor wait through a Node boot and a 26 MB asset fetch. Scale-to-zero
+  # is the normal default on every platform and it is the wrong one here.
+  auto_stop_machines = false
+  min_machines_running = 1
+
+  # ── And why there may only be ONE ──
+  #
+  # Those rooms are in ONE process's memory. A code created on machine A cannot
+  # be joined on machine B: the second player is told "room not found" while the
+  # first sits watching a code that works for nobody. Raising this needs the
+  # registry moved to something shared first.
+  max_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/__veilcore/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"              # the server streams files and holds no state; 256 also works

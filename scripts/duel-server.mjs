@@ -10,7 +10,13 @@ import { createRoomRegistry } from './duel-rooms.mjs';
 const ROOT = normalize(join(fileURLToPath(new URL('.', import.meta.url)), '..'));
 const useHttps = process.argv.includes('--https');
 const portArg = process.argv.findIndex(value => value === '--port');
-const port = Number(portArg >= 0 ? process.argv[portArg + 1] : process.env.VEILCORE_PORT ?? 5174);
+// PORT first: it is what Fly, Render, Railway and Heroku inject, and a server
+// that ignores it binds somewhere the platform is not listening and receives
+// nothing. VEILCORE_PORT stays for local use, where PORT is usually unset and
+// occasionally belongs to something else entirely.
+const port = Number(
+  portArg >= 0 ? process.argv[portArg + 1] : process.env.PORT ?? process.env.VEILCORE_PORT ?? 5174,
+);
 const host = process.env.VEILCORE_HOST ?? '0.0.0.0';
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -53,12 +59,38 @@ function staticResponse(request, response) {
     response.end('Not found');
     return;
   }
-  const headers = {
+  // ── Two kinds of file, two answers ──
+  //
+  // Everything under assets/ is content that does not change without its name
+  // changing -- a rebuilt GLB is a deliberate act, not a deploy. Those get a
+  // year and `immutable`, so a returning player fetches none of the 25 MB
+  // again and does not even ask.
+  //
+  // The code does not, and must not: there is no build step here, so app.js is
+  // always called app.js and a cached copy would outlive the deploy that
+  // replaced it. `no-cache` is not "do not store" -- it stores and revalidates,
+  // which is what makes the next paragraph matter.
+  const stat = statSync(path);
+  const asset = relative.startsWith('assets/');
+  const modified = stat.mtime.toUTCString();
+
+  // ── Revalidation needs something to revalidate against ──
+  //
+  // `no-cache` with no validator means the browser has nothing to ask about and
+  // re-downloads in full every time, which is the opposite of the intent.
+  // Last-Modified gives it a question to ask; the 304 below is the cheap answer.
+  if (!asset && request.headers['if-modified-since'] === modified) {
+    response.writeHead(304, { 'Cache-Control': 'no-cache', 'Last-Modified': modified });
+    response.end();
+    return;
+  }
+
+  response.writeHead(200, {
     'Content-Type': MIME[extname(path).toLowerCase()] ?? 'application/octet-stream',
-    'Cache-Control': 'no-cache',
-    'Content-Length': statSync(path).size,
-  };
-  response.writeHead(200, headers);
+    'Cache-Control': asset ? 'public, max-age=31536000, immutable' : 'no-cache',
+    'Last-Modified': modified,
+    'Content-Length': stat.size,
+  });
   if (request.method === 'HEAD') response.end();
   else createReadStream(path).pipe(response);
 }

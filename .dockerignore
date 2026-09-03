@@ -1,0 +1,18 @@
+.git
+.github
+node_modules
+.cert
+tests
+docs
+
+# Referenced by nothing: both pages load sealed-porcelain-duelist-fingers.glb.
+# This is the rig from before the fingers were added -- worth keeping in the
+# repo, worth 15 MB of not shipping.
+assets/models/arena/sealed-porcelain-duelist.glb
+
+# Local tooling that never runs in the container. duel-server.mjs and
+# duel-rooms.mjs are NOT here, and must not be: they are the server.
+scripts/rune-distance.mjs
+scripts/glb-info.mjs
+scripts/share-duel.mjs
+scripts/create-local-cert.sh
