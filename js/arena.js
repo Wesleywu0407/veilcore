@@ -9,6 +9,7 @@ import { DUEL } from './arena/config.js';
 import { createDuelist } from './arena/duelist.js';
 import { FINGERS } from './spell-room/fingers.js';
 import { createBodyMap, anchorOf, ARM_IN_SPANS } from './spell-room/body-map.js';
+import { drawFace } from './spell-room/draw-face.js';
 import { createOpponentController } from './arena/opponent.js';
 import { createSpellSystem } from './arena/spell-system.js';
 import { createPerformanceGovernor } from './arena/performance.js';
@@ -1810,7 +1811,15 @@ function drawSelfie(frame) {
     }
   }
 
+  // ── The face, drawn, because otherwise there is no way to know ──
+  //
+  // The hands have had a skeleton on this panel from the start and the face had
+  // nothing but a line of numbers, so "is it even seeing my face?" could not be
+  // answered from the screen -- on the page where the head tracking looked like
+  // it had never been wired in at all. Same drawer as the mirror's.
   ctx.globalAlpha = 1;
+  drawFace(ctx, frame.head, p => [x(p), y(p)], { live: GOLD, cold: '#ff6b6b' }, 2);
+
   ctx.fillStyle = 'rgba(5,6,12,.72)';
   ctx.fillRect(rect.left, rect.top, rect.width, 24);
   ctx.font = "500 8px 'IBM Plex Mono', monospace";

@@ -31,6 +31,7 @@ import {
 let trackerOn = true;
 import { fingerCurls, palmBasis, FINGERS } from './spell-room/fingers.js';
 import { createBodyMap, anchorOf, ARM_IN_SPANS } from './spell-room/body-map.js';
+import { drawFace } from './spell-room/draw-face.js';
 import { loadGLB } from './arena/asset-library.js';
 
 const GOLD = '#ffd98a';
@@ -534,38 +535,9 @@ function drawScan(frame) {
     }
   }
 
-  // ── The face, drawn, because otherwise there is no way to know ──
-  //
-  // The hands have had a skeleton on this panel from the start and the face has
-  // had nothing, so "is it even seeing my face?" was unanswerable from the
-  // screen -- which is exactly the question to be able to answer before judging
-  // anything the head does.
-  const head = frame.head;
-  if (head?.points) {
-    const { nose, leftEar, rightEar, eyes } = head.points;
-    scanCtx.strokeStyle = head.levelled ? GOLD : RED;
-    scanCtx.lineWidth = 1.5;
-    // The ear line: the reference pitch is measured against.
-    scanCtx.beginPath();
-    scanCtx.moveTo(...at(leftEar));
-    scanCtx.lineTo(...at(rightEar));
-    scanCtx.stroke();
-    // And the front of the face, which is what moves against it.
-    scanCtx.fillStyle = head.levelled ? GOLD : RED;
-    for (const p of [nose, ...(eyes ?? [])]) {
-      scanCtx.beginPath();
-      scanCtx.arc(...at(p), 2.5, 0, Math.PI * 2);
-      scanCtx.fill();
-    }
-    // Where the head is pointed, as a line off the nose -- so a turn is visible
-    // as a turn rather than as a number somewhere else on the screen.
-    const [nx, ny] = at(nose);
-    scanCtx.beginPath();
-    scanCtx.moveTo(nx, ny);
-    scanCtx.lineTo(nx + Math.sin(-head.yaw) * 26, ny - Math.sin(head.pitch) * 26);
-    scanCtx.stroke();
-  } else if (showCamera) {
-    scanCtx.fillStyle = RED;
+  // The face the tracker is reading. Shared with the duel's panel, so the two
+  // cannot answer "is it seeing my face" differently. See draw-face.js.
+  if (!drawFace(scanCtx, frame.head, at, { live: GOLD, cold: RED }) && showCamera) {
     scanCtx.font = '10px "IBM Plex Mono", monospace';
     scanCtx.fillText('no face', 6, 14);
   }
