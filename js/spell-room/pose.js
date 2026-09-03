@@ -370,3 +370,41 @@ export function headPitch(lift, rest) {
   const pitch = (lift - rest) * HEAD_PITCH_GAIN;
   return Math.max(-HEAD_PITCH_LIMIT, Math.min(HEAD_PITCH_LIMIT, pitch));
 }
+
+// A wild frame must not become the arm's length for the rest of the session,
+// so a reading is only believed if it is plausible against the shoulders, and
+// the remembered maximum leaks back down slowly if it was ever overshot.
+const ARM_SPAN_SANE = 2.6;      // shoulder widths -- past this it is a bad frame
+const ARM_SPAN_DECAY = 0.995;   // about twenty seconds to halve, at the body rate
+
+/**
+ * The player's own arm length, in the picture, learned from the picture.
+ *
+ * The alternative is a constant -- an arm is about 1.55 shoulder widths -- and
+ * a constant is somebody else's body. Too small and every offset divides up too
+ * large, saturates, and the arm reads as fully extended no matter what the
+ * player does; too large and they can never reach anything.
+ *
+ * Take the MAXIMUM seen rather than the average. Any single reading is the arm
+ * as the lens sees it, which is the true length only when the arm happens to
+ * lie across the frame; every other pose foreshortens it and reads SHORT. There
+ * is no reading that is too long for an honest reason, so the longest one is
+ * the closest to the truth.
+ */
+export function createArmSpan() {
+  let span = 0;
+  return {
+    get value() { return span; },
+    /** Feed one arm chain and the shoulder span that sanity-checks it. */
+    feed(arm, shoulders) {
+      if (!arm?.shoulder || !arm?.elbow || !arm?.wrist || !(shoulders > 0)) return span;
+      const upper = Math.hypot(arm.elbow.x - arm.shoulder.x, arm.elbow.y - arm.shoulder.y);
+      const fore = Math.hypot(arm.wrist.x - arm.elbow.x, arm.wrist.y - arm.elbow.y);
+      const measured = upper + fore;
+      if (!(measured > 0) || measured > shoulders * ARM_SPAN_SANE) return span;
+      span = Math.max(span * ARM_SPAN_DECAY, measured);
+      return span;
+    },
+    reset() { span = 0; },
+  };
+}

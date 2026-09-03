@@ -81,6 +81,7 @@ const _twSpin = new THREE.Quaternion();
 const _twVec = new THREE.Vector3();
 const _twWorld = new THREE.Quaternion();
 const _twParent = new THREE.Quaternion();
+const _girdleTarget = new THREE.Vector3();
 const _twFore = new THREE.Vector3();
 const _twHand = new THREE.Vector3();
 
@@ -397,6 +398,62 @@ function collectHeadRig(model) {
   return bones.length ? bones : null;
 }
 
+// ── The shoulder is a joint, and it was being treated as a wall ──
+//
+// The arm IK drives Arm -> ForeArm -> Hand and stops there. The rig has a
+// clavicle above that -- RightShoulder / LeftShoulder -- and the idle clip
+// animates it, so the model was built expecting it to move. Nothing here ever
+// moved it, so every raised arm pivoted around a point that never shifted, and
+// that is most of what reads as a doll rather than a person.
+//
+// The ratio is not invented. Scapulohumeral rhythm: past about 30 degrees of
+// elevation, a shoulder girdle contributes roughly one degree for every two the
+// arm makes, so the clavicle takes about a third of the total. Below that
+// threshold it does essentially nothing, which is why an arm hanging by your
+// side does not move your shoulder.
+const SHOULDER_FREE = 0.52;        // 30 degrees, where the girdle starts to help
+const SHOULDER_RATIO = 0.5;        // one degree of girdle per two of arm
+const SHOULDER_LIMIT = 0.45;       // 26 degrees, about as far as a clavicle goes
+const SHOULDER_TRACK = 10;
+
+function collectGirdle(model) {
+  model.updateMatrixWorld(true);
+  const forward = new THREE.Vector3(0, 0, 1);
+  const rig = {};
+  for (const side of ['Left', 'Right']) {
+    const bone = model.getObjectByName(`${side}Shoulder`);
+    if (!bone) continue;
+    const inverse = bone.getWorldQuaternion(new THREE.Quaternion()).invert();
+    rig[side.toLowerCase()] = {
+      bone,
+      rest: bone.quaternion.clone(),
+      // Rotating about the body's FORWARD axis is what lifts a clavicle. The
+      // axis is captured at bind rather than assumed, same as the head's.
+      axis: forward.clone().applyQuaternion(inverse).normalize(),
+      // Local +X is this body's left, so a positive turn about forward lifts
+      // the left clavicle and drops the right one.
+      sign: side === 'Left' ? 1 : -1,
+      live: 0,
+    };
+  }
+  return Object.keys(rig).length ? rig : null;
+}
+
+/**
+ * How far the girdle should lift, given where the hand has been sent.
+ *
+ * Read off the TARGET rather than off the solved arm: the arm is solved after
+ * this, from a shoulder this is about to move, and reading the result of the
+ * previous frame to decide this one is how a rig starts oscillating.
+ */
+function girdleLift(target, shoulder, armReach) {
+  if (!target || !shoulder || !(armReach > 0)) return 0;
+  const rise = (target.y - shoulder.y) / armReach;      // -1..1 of an arm
+  const elevation = Math.asin(Math.max(-1, Math.min(1, rise)));
+  if (elevation <= SHOULDER_FREE) return 0;
+  return Math.min(SHOULDER_LIMIT, (elevation - SHOULDER_FREE) * SHOULDER_RATIO);
+}
+
 function collectPalmRig(model) {
   const rig = {};
   const along = new THREE.Vector3();
@@ -618,6 +675,7 @@ export function createDuelist(scene, {
   let armReach = 0;          // arm length, measured from the rig
   let shoulderLocal = null;  // right shoulder position in root space
   let leftShoulderLocal = null;
+  let girdle = null;
   let headRig = null;
   let headTarget = null;        // radians, positive toward this body's own left
   let headPitchTarget = 0;      // radians, positive looking up
@@ -1041,6 +1099,7 @@ export function createDuelist(scene, {
       imported.name = `${name} Meshy model`;
       fingerChains = collectFingerChains(imported);
       palmRig = collectPalmRig(imported);
+      girdle = collectGirdle(imported);
       headRig = collectHeadRig(imported);
       imported.traverse(object => {
         if (!object.isMesh) return;
@@ -1292,6 +1351,39 @@ export function createDuelist(scene, {
               bone.rotateOnAxis(_fingerAxis, FINGER_FULL * FINGER_JOINT[segment] * curl);
             }
           }
+        }
+      }
+
+      // ── Lift the shoulder girdle, BEFORE the arms are solved ──
+      //
+      // Order is the whole point. The IK reads the shoulder bone's world
+      // position fresh on every solve, so moving the clavicle first means the
+      // arm is solved from where the shoulder has arrived; moving it after
+      // would drag the already-solved hand off its target.
+      //
+      // And it reads the eased TARGETS rather than the solved arm: deciding
+      // this frame's lift from last frame's result is how a rig starts to
+      // oscillate.
+      //
+      // Like the head, it hands the bone back when it has nothing to say --
+      // these clavicles are animated by the duel's clips, and writing bind pose
+      // over them every frame would flatten the idle's shoulder movement.
+      if (girdle) {
+        root.updateMatrixWorld(true);
+        const wanted = {
+          right: reachWeight > 0.01
+            ? girdleLift(root.worldToLocal(_girdleTarget.copy(lastReach)), shoulderLocal, armReach) : 0,
+          left: leftReachWeight > 0.01
+            ? girdleLift(root.worldToLocal(_girdleTarget.copy(lastLeftReach)), leftShoulderLocal, armReach) : 0,
+        };
+        for (const side of ['left', 'right']) {
+          const part = girdle[side];
+          if (!part) continue;
+          const to = wanted[side];
+          if (to === 0 && Math.abs(part.live) < 1e-4) { part.live = 0; continue; }
+          part.live += (to - part.live) * Math.min(1, dt * SHOULDER_TRACK);
+          part.bone.quaternion.copy(part.rest);
+          part.bone.rotateOnAxis(part.axis, part.live * part.sign);
         }
       }
 

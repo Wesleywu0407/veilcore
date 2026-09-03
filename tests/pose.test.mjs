@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { POSE, readPose, elbowHint, sideOfWrist, createSideLatch, createLatch, handsCrossed,
   readHead, HEAD_LIMIT, headPitch, createHeadLevel,
-  HEAD_PITCH_LIMIT } from '../js/spell-room/pose.js';
+  HEAD_PITCH_LIMIT, createArmSpan } from '../js/spell-room/pose.js';
 
 /**
  * A body standing square to the camera, already un-mirrored: the player's right
@@ -346,4 +346,53 @@ test('the player can always overrule it', () => {
   assert.equal(level.rest, -0.31);
   level.forget();
   assert.equal(level.ready, false);
+});
+
+// ── Learning the player's own arm ─────────────────────────────────────────────
+
+const arm = (upper, fore) => ({
+  shoulder: { x: 0.5, y: 0.4 },
+  elbow: { x: 0.5, y: 0.4 + upper },
+  wrist: { x: 0.5, y: 0.4 + upper + fore },
+});
+
+test('it knows nothing until it has seen an arm', () => {
+  assert.equal(createArmSpan().value, 0, 'zero means "use the assumed constant"');
+});
+
+test('the longest arm seen is the one believed', () => {
+  // Every pose but one foreshortens, so every reading but one is too SHORT.
+  // There is no honest way to read too long, which is why max beats average.
+  const span = createArmSpan();
+  span.feed(arm(0.10, 0.09), 0.16);          // arm angled toward the lens
+  span.feed(arm(0.15, 0.13), 0.16);          // across the frame: the true one
+  span.feed(arm(0.06, 0.05), 0.16);          // pointing at the camera
+  // Not exactly 0.28: the decay takes a little off on every frame that does not
+  // match the peak, which is the mechanism that lets an overshoot come back.
+  assert.ok(Math.abs(span.value - 0.28) < 0.01, `held ${span.value.toFixed(4)}`);
+  assert.ok(span.value > 0.19, 'and nowhere near the foreshortened readings');
+});
+
+test('a wild frame cannot become the arm for the rest of the session', () => {
+  const span = createArmSpan();
+  span.feed(arm(0.15, 0.13), 0.16);
+  const good = span.value;
+  span.feed(arm(2.0, 2.0), 0.16);            // a lost wrist somewhere off-frame
+  assert.equal(span.value, good, 'implausible against the shoulders, so ignored');
+});
+
+test('an overshoot leaks back down rather than sticking forever', () => {
+  const span = createArmSpan();
+  span.feed(arm(0.20, 0.20), 0.16);          // just inside plausible, but long
+  const peak = span.value;
+  for (let i = 0; i < 200; i++) span.feed(arm(0.15, 0.13), 0.16);
+  assert.ok(span.value < peak, 'the maximum has to be able to come down');
+  assert.ok(span.value >= 0.28 - 1e-9, 'but never below what is actually seen');
+});
+
+test('half an arm chain teaches it nothing', () => {
+  const span = createArmSpan();
+  span.feed({ shoulder: { x: 0.5, y: 0.4 }, elbow: null, wrist: null }, 0.16);
+  assert.equal(span.value, 0);
+  assert.equal(span.feed(arm(0.15, 0.13), 0), 0, 'nor does a body with no width');
 });

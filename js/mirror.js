@@ -519,6 +519,17 @@ function drawReadout(frame) {
   } else {
     ctx.fillText('R · record 8s of landmarks   C · camera', 260, 124);
   }
+  {
+    // What scale the arm is being mapped through, so a wrong one is visible on
+    // screen rather than felt as "the arm goes too far" with no cause attached.
+    const learned = armSpan.right.value;
+    const shoulders = shoulderSpan(frame.pose);
+    ctx.fillText(
+      learned && shoulders
+        ? `arm — ${(learned / shoulders).toFixed(2)} shoulder widths, learned`
+        : `arm — ${ARM_IN_SPANS} shoulder widths, assumed`,
+      440, 160);
+  }
   const deg = r => (r * 180 / Math.PI).toFixed(0);
   if (!frame.head) {
     ctx.fillText('head — no face in shot', 24, 142);
