@@ -393,8 +393,23 @@ export function headPitch(lift, rest) {
 // edge of the frame, an arm's length too close to the lens. Hence "with one
 // hand I can barely see it, with two it is fine": two hands in front of you are
 // the pose the body model reads most reliably.
-const ARM_SPAN_SANE = 1.85;     // shoulder widths -- past this it is a bad frame
-const ARM_SPAN_DECAY = 0.995;   // about twenty seconds to halve, at the body rate
+// ── The bound has to be in MEDIAPIPE's units, not a textbook's ──
+//
+// 1.85 came from anatomy: shoulders about 0.23 of a person's height, arm about
+// 0.33, so the ratio is near 1.44. Then it sat pinned at exactly 1.85 on real
+// data, hovering 1.73-1.85 -- which is the shape of a bound fighting the truth
+// rather than catching a lie.
+//
+// The reason is that MediaPipe's 11 and 12 sit slightly INSIDE the acromion,
+// nearer the neck, so the width it reports is smaller than the biacromial width
+// the textbook figure is defined on. Every ratio measured against it therefore
+// runs high, and correctly so. The number that matters is not what anatomy says
+// about people, it is what this model says about people.
+//
+// 1.95 still separates the real readings (1.7-1.85) from the failure this
+// exists to catch -- a chain that takes its shoulder from one arm and its wrist
+// from the other, which measured 2.04-2.07.
+const ARM_SPAN_SANE = 1.95;
 
 /**
  * The player's own arm length, in the picture, learned from the picture.
@@ -428,21 +443,49 @@ const ARM_SPAN_DECAY = 0.995;   // about twenty seconds to halve, at the body ra
  * A ratio to the shoulders has the distance cancel out of it, which is the
  * property that was wanted in the first place.
  */
+// How long the maximum has to stop growing before the arm is called learned.
+// At the body model's rate that is a few seconds of ordinary movement.
+const ARM_SPAN_SETTLES_AFTER = 40;   // accepted readings with no real growth
+const ARM_SPAN_GROWTH = 1.01;        // 1% -- anything less is noise, not an arm
+
 export function createArmSpan() {
   let widths = 0;
+  let quiet = 0;
+  let settled = false;
   return {
     /** The arm's length in SHOULDER WIDTHS, or 0 before one has been seen. */
     get widths() { return widths; },
+    /** True once it has stopped moving and been frozen. */
+    get settled() { return settled; },
     /** Feed one arm chain and the shoulder span it is measured against. */
     feed(arm, shoulders) {
+      // ── Once learned, it is FROZEN ──
+      //
+      // This kept feeding forever, so the number the whole mapping divides by
+      // was alive: 1.73, 1.74, 1.78, 1.83, 1.85, frame after frame. Every one of
+      // those wobbles moves the hand, because the hand's place is an offset
+      // DIVIDED by this -- a one percent change in the scale slides a hand held
+      // near full reach by nearly one percent of an arm, with the player
+      // perfectly still. That is a drift the deadband can never catch, because
+      // it is not noise on the input; the input is fine and the ruler is moving.
+      //
+      // An arm does not get longer during a session. Learn it, then stop.
+      if (settled) return widths;
       if (!arm?.shoulder || !arm?.elbow || !arm?.wrist || !(shoulders > 0)) return widths;
       const upper = Math.hypot(arm.elbow.x - arm.shoulder.x, arm.elbow.y - arm.shoulder.y);
       const fore = Math.hypot(arm.wrist.x - arm.elbow.x, arm.wrist.y - arm.elbow.y);
       const ratio = (upper + fore) / shoulders;
       if (!(ratio > 0) || ratio > ARM_SPAN_SANE) return widths;
-      widths = Math.max(widths * ARM_SPAN_DECAY, ratio);
+
+      if (ratio > widths * ARM_SPAN_GROWTH) {
+        widths = ratio;        // a genuinely longer look at the arm
+        quiet = 0;
+      } else {
+        widths = Math.max(widths, ratio);
+        if (++quiet >= ARM_SPAN_SETTLES_AFTER) settled = true;
+      }
       return widths;
     },
-    reset() { widths = 0; },
+    reset() { widths = 0; quiet = 0; settled = false; },
   };
 }

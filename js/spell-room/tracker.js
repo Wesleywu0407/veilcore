@@ -163,6 +163,18 @@ const anchorFilters = {
 // lag that would cost on a hand. This is the quietest filter in the room.
 // A wider band than the hand's: a shoulder that has genuinely moved has moved
 // further than this, and one that appears to have moved less has not.
+// ── Measured, after a wrong guess ──
+//
+// This was briefly narrowed to a 0.0015 band on the reasoning that a shoulder
+// is an ORIGIN, so a step here is multiplied about fourfold on its way to the
+// arm. The reasoning was sound and the conclusion was backwards: measured over
+// a still shoulder, the WIDE band steps 0.000146 of a frame and the narrow one
+// 0.000670 -- four and a half times worse.
+//
+// A soft deadband does not step under noise, it freezes: noise smaller than the
+// band never crosses it at all. And under real movement it does not jump
+// either, it follows with a constant offset of one band. Narrowing it only lets
+// the noise back in to nudge the value continuously. The wide band stays.
 const POSE_FILTER = { minCutoff: 1.0, beta: 3.0, dCutoff: 1.0, deadband: 0.008 };
 const poseFilters = new Map();
 

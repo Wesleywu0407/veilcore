@@ -71,10 +71,39 @@ test('holding an arm still costs it nothing when it moves', () => {
   assert.ok(behind < 0.5, `${behind.toFixed(2)} frames behind a real swing`);
 });
 
-test('a shoulder is held still through a bigger wobble than a hand', () => {
-  // It has to be: the hand target is now an offset FROM the shoulder, so noise
-  // here moves the hand even when the hand is perfectly still.
-  assert.ok(shake(makeSteady, POSE, 0.012).filtered < HALF_A_PIXEL);
+/** The largest single-frame change -- a STEP, as opposed to total wander. */
+function biggestStep(config, amplitude, frames = 200) {
+  const filter = makeSteady(config);
+  let prev = null, worst = 0;
+  for (let i = 0; i < frames; i++) {
+    const out = filter.filter(0.5 + noise(i) * amplitude, i * STEP);
+    if (i > 40 && prev !== null) worst = Math.max(worst, Math.abs(out - prev));
+    prev = out;
+  }
+  return worst;
+}
+
+test('a shoulder never takes a visible step', () => {
+  // The measure that matters for an ORIGIN. A hand offset is divided by about a
+  // quarter of the frame, so a step here is multiplied roughly fourfold by the
+  // time it reaches the arm -- while noise of the same size is divided away to
+  // nothing. Total wander is not the enemy here; discontinuity is.
+  const step = biggestStep(POSE, 0.012);
+  assert.ok(step < 0.0005, `stepped ${step.toFixed(6)} of a frame in one go`);
+});
+
+test('and the hand, whose position IS the output, still stops dead', () => {
+  assert.ok(shake(makeSteady, ANCHOR, 0.008).filtered < HALF_A_PIXEL);
+});
+
+test('narrowing the shoulder band would make it step MORE, not less', () => {
+  // Recorded because the intuition runs the other way and cost a wrong change.
+  // A wide soft band freezes under noise -- noise smaller than the band never
+  // crosses it. Narrow it and the noise gets back in to nudge the value on
+  // every frame, which is a continuous creep rather than the stillness wanted.
+  const narrow = { minCutoff: 0.4, beta: 1.0, dCutoff: 1.0, deadband: 0.0015 };
+  assert.ok(biggestStep(narrow, 0.012) > biggestStep(POSE, 0.012) * 3,
+    'the wide band should be the steadier of the two');
 });
 
 test('a shoulder is allowed to lag, and a hand is not', () => {

@@ -592,10 +592,10 @@ function drawReadout(frame) {
     // screen rather than felt as "the arm goes too far" with no cause attached.
     // Already in shoulder widths -- no dividing here. Dividing a stored length
     // by the live shoulders is what let this print 1.89 against a 1.85 bound.
-    const learned = armSpan.right.widths;
+    const rig = armSpan.right;
     ctx.fillText(
-      learned
-        ? `arm — ${learned.toFixed(2)} shoulder widths, learned`
+      rig.widths
+        ? `arm — ${rig.widths.toFixed(2)} shoulder widths, ${rig.settled ? 'LOCKED' : 'learning…'}`
         : `arm — ${ARM_IN_SPANS} shoulder widths, assumed`,
       440, 160);
   }

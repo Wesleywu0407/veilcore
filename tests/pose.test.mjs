@@ -367,9 +367,8 @@ test('the longest arm seen is the one believed', () => {
   span.feed(arm(0.10, 0.09), 0.16);          // arm angled toward the lens
   span.feed(arm(0.15, 0.13), 0.16);          // across the frame: the true one
   span.feed(arm(0.06, 0.05), 0.16);          // pointing at the camera
-  // 0.28 / 0.16 = 1.75 widths. Not exact: the decay takes a little off on every
-  // frame that misses the peak, which is what lets an overshoot come back down.
-  assert.ok(Math.abs(span.widths - 1.75) < 0.05, `held ${span.widths.toFixed(3)}`);
+  // 0.28 / 0.16 = 1.75 widths, exactly: the maximum is kept, not averaged.
+  assert.ok(Math.abs(span.widths - 1.75) < 1e-9, `held ${span.widths.toFixed(3)}`);
   assert.ok(span.widths > 1.2, 'and nowhere near the foreshortened readings');
 });
 
@@ -390,7 +389,7 @@ test('a chain built from two different arms is rejected, not learned', () => {
   const span = createArmSpan();
   span.feed(arm(0.15, 0.13), 0.16);          // 1.75 widths: a real arm
   const honest = span.widths;
-  span.feed(arm(0.17, 0.15), 0.16);          // 2.00 widths: a crossed chain
+  span.feed(arm(0.18, 0.155), 0.16);         // 2.09 widths: a crossed chain
   assert.ok(span.widths <= honest, `a bad chain raised the scale to ${span.widths}`);
 });
 
@@ -398,17 +397,31 @@ test('the bound is anatomy, and stated as such', () => {
   // An arm is about 0.35 of a person and their shoulders about 0.25, so the
   // ratio lives near 1.4 and does not credibly reach 1.9.
   const span = createArmSpan();
-  span.feed(arm(0.16, 0.146), 0.16);         // 1.91 widths
+  span.feed(arm(0.17, 0.145), 0.16);         // 1.97 widths
   assert.equal(span.widths, 0, 'past the plausible band, so nothing is learned');
 });
 
-test('an overshoot leaks back down rather than sticking forever', () => {
+test('the ruler stops moving once it has settled', () => {
+  // The drift this exists to kill. Every wobble in this number slides the hand,
+  // because the hand's place is an offset DIVIDED by it -- so a live scale is a
+  // drift no amount of smoothing on the input can reach.
   const span = createArmSpan();
-  span.feed(arm(0.15, 0.138), 0.16);         // 1.80 widths: just inside plausible
-  const peak = span.widths;
   for (let i = 0; i < 200; i++) span.feed(arm(0.15, 0.13), 0.16);
-  assert.ok(span.widths < peak, 'the maximum has to be able to come down');
-  assert.ok(span.widths >= 1.75 - 1e-9, 'but never below what is actually seen');
+  assert.ok(span.settled, 'it should have settled by now');
+  const locked = span.widths;
+  // Even a plausible longer reading cannot move it afterwards.
+  span.feed(arm(0.15, 0.145), 0.16);
+  assert.equal(span.widths, locked, 'a settled arm does not get longer');
+});
+
+test('but it keeps learning while the arm is still growing', () => {
+  // Settling early would freeze a foreshortened reading and shrink every
+  // movement for the rest of the session.
+  const span = createArmSpan();
+  for (let i = 0; i < 30; i++) span.feed(arm(0.08, 0.07), 0.16);   // arm toward the lens
+  assert.ok(!span.settled, 'thirty frames of one pose is not a whole arm');
+  span.feed(arm(0.15, 0.13), 0.16);                                // finally across the frame
+  assert.ok(Math.abs(span.widths - 1.75) < 0.01, `took ${span.widths.toFixed(3)}`);
 });
 
 test('half an arm chain teaches it nothing', () => {
