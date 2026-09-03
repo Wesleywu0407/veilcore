@@ -409,21 +409,40 @@ const ARM_SPAN_DECAY = 0.995;   // about twenty seconds to halve, at the body ra
  * lie across the frame; every other pose foreshortens it and reads SHORT. There
  * is no reading that is too long for an honest reason, so the longest one is
  * the closest to the truth.
+ *
+ * ── In SHOULDER WIDTHS, never in picture units ──
+ *
+ * This stored an absolute length at first, and that quietly undid the whole
+ * point of it. A picture has no fixed scale: lean toward the lens and every
+ * distance in the frame grows together. A length learned at one distance is
+ * therefore wrong at every other one -- too small once you sit back, so the
+ * offsets divide up too large and the arm overshoots; too large once you lean
+ * in, so it barely moves. Which is exactly "sometimes it is fine and sometimes
+ * it is not", with the trigger being the player shifting in their chair.
+ *
+ * The symptom that gave it away: the panel reported 1.89 shoulder widths while
+ * the plausible bound was 1.85. It could print a number its own guard forbids
+ * because the guard divided by the CURRENT shoulders and the stored value did
+ * not -- so the two were not in the same units at all.
+ *
+ * A ratio to the shoulders has the distance cancel out of it, which is the
+ * property that was wanted in the first place.
  */
 export function createArmSpan() {
-  let span = 0;
+  let widths = 0;
   return {
-    get value() { return span; },
-    /** Feed one arm chain and the shoulder span that sanity-checks it. */
+    /** The arm's length in SHOULDER WIDTHS, or 0 before one has been seen. */
+    get widths() { return widths; },
+    /** Feed one arm chain and the shoulder span it is measured against. */
     feed(arm, shoulders) {
-      if (!arm?.shoulder || !arm?.elbow || !arm?.wrist || !(shoulders > 0)) return span;
+      if (!arm?.shoulder || !arm?.elbow || !arm?.wrist || !(shoulders > 0)) return widths;
       const upper = Math.hypot(arm.elbow.x - arm.shoulder.x, arm.elbow.y - arm.shoulder.y);
       const fore = Math.hypot(arm.wrist.x - arm.elbow.x, arm.wrist.y - arm.elbow.y);
-      const measured = upper + fore;
-      if (!(measured > 0) || measured > shoulders * ARM_SPAN_SANE) return span;
-      span = Math.max(span * ARM_SPAN_DECAY, measured);
-      return span;
+      const ratio = (upper + fore) / shoulders;
+      if (!(ratio > 0) || ratio > ARM_SPAN_SANE) return widths;
+      widths = Math.max(widths * ARM_SPAN_DECAY, ratio);
+      return widths;
     },
-    reset() { span = 0; },
+    reset() { widths = 0; },
   };
 }

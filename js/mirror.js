@@ -268,8 +268,11 @@ function handTarget(side, at, pose) {
   // The learned arm if there is one, the population average until then. Both
   // are a length in the same units -- the picture -- so the handover when the
   // learned one arrives is a few percent, not a jump.
+  // Both are now in SHOULDER WIDTHS, so multiplying by the CURRENT shoulders is
+  // what makes the mapping survive the player moving toward or away from the
+  // lens. See createArmSpan().
   const learned = shoulders ? armSpan[side].feed(pose[side], shoulders) : 0;
-  const scale = learned || shoulders * ARM_IN_SPANS;
+  const scale = shoulders * (learned || ARM_IN_SPANS);
   if (shoulder && scale) lastAnchor[side] = { x: shoulder.x, y: shoulder.y, scale };
   const held = lastAnchor[side];
   // Only the very first frames, before any body has ever been seen, take the
@@ -415,6 +418,11 @@ function driveBody(frame) {
     // it back up. Returning leaves every target exactly where it was, which is
     // what "not yet" ought to look like.
     placement = 'one hand — waiting for the body to place it';
+    // Clear what the panel claims to be seeing, or it keeps drawing the hands
+    // from whatever frame ran last -- and a panel that shows two live hands
+    // while saying it cannot place one is worse than a blank one, because the
+    // whole reason it exists is to be believed when the picture is confusing.
+    readout.left = readout.right = null;
     // The head is not waiting on anything: it reads the face, not the hands.
     avatar.look(frame.tracked ? frame.head?.yaw : null, frame.head?.pitch ?? 0);
     return;
@@ -582,11 +590,12 @@ function drawReadout(frame) {
   {
     // What scale the arm is being mapped through, so a wrong one is visible on
     // screen rather than felt as "the arm goes too far" with no cause attached.
-    const learned = armSpan.right.value;
-    const shoulders = shoulderSpan(frame.pose);
+    // Already in shoulder widths -- no dividing here. Dividing a stored length
+    // by the live shoulders is what let this print 1.89 against a 1.85 bound.
+    const learned = armSpan.right.widths;
     ctx.fillText(
-      learned && shoulders
-        ? `arm — ${(learned / shoulders).toFixed(2)} shoulder widths, learned`
+      learned
+        ? `arm — ${learned.toFixed(2)} shoulder widths, learned`
         : `arm — ${ARM_IN_SPANS} shoulder widths, assumed`,
       440, 160);
   }

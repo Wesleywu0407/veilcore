@@ -357,7 +357,7 @@ const arm = (upper, fore) => ({
 });
 
 test('it knows nothing until it has seen an arm', () => {
-  assert.equal(createArmSpan().value, 0, 'zero means "use the assumed constant"');
+  assert.equal(createArmSpan().widths, 0, 'zero means "use the assumed constant"');
 });
 
 test('the longest arm seen is the one believed', () => {
@@ -367,18 +367,18 @@ test('the longest arm seen is the one believed', () => {
   span.feed(arm(0.10, 0.09), 0.16);          // arm angled toward the lens
   span.feed(arm(0.15, 0.13), 0.16);          // across the frame: the true one
   span.feed(arm(0.06, 0.05), 0.16);          // pointing at the camera
-  // Not exactly 0.28: the decay takes a little off on every frame that does not
-  // match the peak, which is the mechanism that lets an overshoot come back.
-  assert.ok(Math.abs(span.value - 0.28) < 0.01, `held ${span.value.toFixed(4)}`);
-  assert.ok(span.value > 0.19, 'and nowhere near the foreshortened readings');
+  // 0.28 / 0.16 = 1.75 widths. Not exact: the decay takes a little off on every
+  // frame that misses the peak, which is what lets an overshoot come back down.
+  assert.ok(Math.abs(span.widths - 1.75) < 0.05, `held ${span.widths.toFixed(3)}`);
+  assert.ok(span.widths > 1.2, 'and nowhere near the foreshortened readings');
 });
 
 test('a wild frame cannot become the arm for the rest of the session', () => {
   const span = createArmSpan();
   span.feed(arm(0.15, 0.13), 0.16);
-  const good = span.value;
+  const good = span.widths;
   span.feed(arm(2.0, 2.0), 0.16);            // a lost wrist somewhere off-frame
-  assert.equal(span.value, good, 'implausible against the shoulders, so ignored');
+  assert.equal(span.widths, good, 'implausible against the shoulders, so ignored');
 });
 
 test('a chain built from two different arms is rejected, not learned', () => {
@@ -389,9 +389,9 @@ test('a chain built from two different arms is rejected, not learned', () => {
   // so one such frame set the scale for the whole session.
   const span = createArmSpan();
   span.feed(arm(0.15, 0.13), 0.16);          // 1.75 widths: a real arm
-  const honest = span.value;
+  const honest = span.widths;
   span.feed(arm(0.17, 0.15), 0.16);          // 2.00 widths: a crossed chain
-  assert.ok(span.value <= honest, `a bad chain raised the scale to ${span.value}`);
+  assert.ok(span.widths <= honest, `a bad chain raised the scale to ${span.widths}`);
 });
 
 test('the bound is anatomy, and stated as such', () => {
@@ -399,21 +399,42 @@ test('the bound is anatomy, and stated as such', () => {
   // ratio lives near 1.4 and does not credibly reach 1.9.
   const span = createArmSpan();
   span.feed(arm(0.16, 0.146), 0.16);         // 1.91 widths
-  assert.equal(span.value, 0, 'past the plausible band, so nothing is learned');
+  assert.equal(span.widths, 0, 'past the plausible band, so nothing is learned');
 });
 
 test('an overshoot leaks back down rather than sticking forever', () => {
   const span = createArmSpan();
   span.feed(arm(0.15, 0.138), 0.16);         // 1.80 widths: just inside plausible
-  const peak = span.value;
+  const peak = span.widths;
   for (let i = 0; i < 200; i++) span.feed(arm(0.15, 0.13), 0.16);
-  assert.ok(span.value < peak, 'the maximum has to be able to come down');
-  assert.ok(span.value >= 0.28 - 1e-9, 'but never below what is actually seen');
+  assert.ok(span.widths < peak, 'the maximum has to be able to come down');
+  assert.ok(span.widths >= 1.75 - 1e-9, 'but never below what is actually seen');
 });
 
 test('half an arm chain teaches it nothing', () => {
   const span = createArmSpan();
   span.feed({ shoulder: { x: 0.5, y: 0.4 }, elbow: null, wrist: null }, 0.16);
-  assert.equal(span.value, 0);
+  assert.equal(span.widths, 0);
   assert.equal(span.feed(arm(0.15, 0.13), 0), 0, 'nor does a body with no width');
+});
+
+test('the same arm at a different distance is the same arm', () => {
+  // The bug this unit change exists for. Lean toward the lens and every
+  // distance in the frame grows together; a learner that stored a raw length
+  // would read this as a DIFFERENT arm and rescale the whole mapping, which is
+  // why it was fine one moment and wrong the next.
+  const near = createArmSpan();
+  const far = createArmSpan();
+  near.feed(arm(0.30, 0.26), 0.32);          // sitting close: everything doubled
+  far.feed(arm(0.15, 0.13), 0.16);           // sitting back
+  assert.ok(Math.abs(near.widths - far.widths) < 1e-9,
+    `${near.widths.toFixed(3)} close vs ${far.widths.toFixed(3)} far`);
+});
+
+test('and moving mid-session does not rescale what was already learned', () => {
+  const span = createArmSpan();
+  for (let i = 0; i < 5; i++) span.feed(arm(0.15, 0.13), 0.16);
+  const seated = span.widths;
+  for (let i = 0; i < 5; i++) span.feed(arm(0.30, 0.26), 0.32);   // leans in
+  assert.ok(Math.abs(span.widths - seated) < 1e-9, 'the ratio is the same ratio');
 });
