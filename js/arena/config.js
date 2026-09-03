@@ -39,8 +39,28 @@ export const DUEL = Object.freeze({
   gravitySecondsCharged: 1.7,
   gravityRadius: 3.4,             // world units
   gravityRadiusCharged: 2.4,
-  gravityPush: 2.5,               // metres a second, outward from the centre
-  gravityPushCharged: 3.2,
+  // Metres a second, outward from the ARENA centre, applied every frame the
+  // victim is inside the ring. This and not gravitySlow is what decides whether
+  // anyone is held: at 2.5/3.2 the shove was two to four times the slowed walk,
+  // so it ejected them regardless.
+  //
+  // It was also INVERTED. Push grew faster with charge than the radius did, so a
+  // full charge threw its victim clear in 1.03 seconds of a 3.4 second seal
+  // while a flick held for 1.37 of 1.7 -- thirty mana bought less control, not
+  // more. Simulated against the real update() arithmetic, standing still and
+  // running for the edge:
+  //
+  //                    flick, of 1.7s      charged, of 3.4s
+  //     2.5 / 3.2      1.37s   0.88s       1.03s   0.83s     inverted
+  //     1.5 / 1.5      whole   1.18s       1.95s   1.33s
+  //     1.2 / 0.8      whole   1.33s       2.92s   1.73s     <- here
+  //     1.0 / 0.5      whole   1.43s       whole   2.03s     cannot stand out of it
+  //
+  // 1.2/0.8 holds a charged seal for most of its life if you stand there, and
+  // still lets you run out in 1.73 -- while spending the whole of it running,
+  // and therefore not casting. That is the price it should be charging.
+  gravityPush: 1.2,
+  gravityPushCharged: 0.8,
   // What is left of the victim's walking speed inside the ring. This is the
   // spell: the push is a nudge and the duration is a window, but this is what
   // makes standing in one a decision.

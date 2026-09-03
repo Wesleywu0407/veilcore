@@ -2154,7 +2154,22 @@ function strokeScreen(at, out) {
 const _fixX = makeSteady(FIX_FILTER);
 const _fixY = makeSteady(FIX_FILTER);
 
-function tipCorrection(frame, out, now) {
+/**
+ * ── And frozen for the length of a stroke ──
+ *
+ * Filtering was not enough once RUNE_GAIN came in. The correction is ADDED in
+ * screen pixels and the stroke is SCALED, so shrinking the pen's travel to a
+ * quarter left the correction's own wobble at full size against a rune four
+ * times smaller -- and the pen now sits near the wrist, so the correction has
+ * most of a hand to bridge and every curl of the finger changes it.
+ *
+ * But a hand's length in pixels cannot change during a rune. It is a
+ * calibration, so it is measured between strokes and held still through them:
+ * whatever it was on the frame the gate opened is what the whole rune is drawn
+ * with. Nothing your fingers do while drawing can move the line any more.
+ */
+function tipCorrection(frame, out, now, gate) {
+  if (gate) return out;          // mid-rune: keep the one the stroke began with
   out[0] = 0;
   out[1] = 0;
   if (!playerAvatar.fingertipWorld(_strokeTip)) return out;
@@ -2359,7 +2374,7 @@ function drawHandLayer(frame, gate, cast, now) {
   if (!frame.tracked) return;
   const points = currentStroke();
   const hand = runeHandOf(frame);
-  placeStroke(points, frame.tip, tipCorrection(frame, _fix, now), hand);
+  placeStroke(points, frame.tip, tipCorrection(frame, _fix, now, gate), hand);
   if (points.length > 1) {
     const swell = 1 + (cast.phase === 'charging' ? cast.charge : 0) * 1.4;
     // Detection runs at ~30Hz, so a circle arrives as roughly forty points. Join
