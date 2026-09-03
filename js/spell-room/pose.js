@@ -547,5 +547,18 @@ export function handsRaised(hands, pose, wasRaised = false) {
   const line = (left.y + right.y) / 2;
   const margin = shoulders * (wasRaised ? RAISED_EXIT : RAISED_ENTER);
   // y grows DOWN the picture, so "above the shoulders" is a smaller y.
-  return hands.every(hand => hand?.wrist && hand.wrist.y < line - margin);
+  const above = hand => Boolean(hand?.wrist) && hand.wrist.y < line - margin;
+
+  // ── Both hands to enter, BOTH hands to leave ──
+  //
+  // Asking for both on the way out too would break the stance mid-fight, and
+  // break it on the one action the stance exists for: throwing a punch sends
+  // one hand out and often down, while the other stays up guarding. Under an
+  // every() exit that dip drops the player out of boxing and into whatever the
+  // off hand's fingers happened to be showing -- a weapon appearing mid-swing.
+  //
+  // A stance is a thing you are in until you put your hands DOWN, so leaving
+  // takes both of them. One hand up is still a guard, which is also just true
+  // of boxing.
+  return wasRaised ? hands.some(above) : hands.every(above);
 }

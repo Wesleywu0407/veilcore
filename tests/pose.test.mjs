@@ -513,3 +513,21 @@ test('no body, or one hand, is never a guard', () => {
   assert.equal(handsRaised([], shouldersAt()), false);
   assert.equal(handsRaised(wrists(0.1, 0.1), { left: { shoulder: { x: 0.4, y: 0.4 } } }), false);
 });
+
+test('throwing a punch does not drop you out of the stance', () => {
+  // The action the stance exists FOR. A punch sends one hand out and often
+  // down; the other stays up. Requiring both on the way out would end boxing
+  // mid-swing and arm whatever the off hand's fingers were showing.
+  const pose = shouldersAt();
+  const jabbing = wrists(0.15, 0.55);          // one guarding, one committed low
+  assert.equal(handsRaised(jabbing, pose, true), true, 'still boxing');
+});
+
+test('but it still takes both hands up to start', () => {
+  assert.equal(handsRaised(wrists(0.15, 0.55), shouldersAt(), false), false);
+});
+
+test('and both hands down to stop', () => {
+  const pose = shouldersAt();
+  assert.equal(handsRaised(wrists(0.7, 0.7), pose, true), false);
+});
