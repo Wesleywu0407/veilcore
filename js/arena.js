@@ -1876,52 +1876,18 @@ function drawSelfie(frame) {
 const _simHand = new THREE.Vector3();
 const simHand = () => playerAvatar.reachOffset('right', -0.25, 0.22, 0.62, _simHand);
 
-// What the player's own fingers are doing, handed to the duelist's hands.
+// ── The wrist goes through the body map, like everything else ──
 //
-// Sides come from `frame.hands`, which decides them by x position rather than
-// by MediaPipe's handedness label -- the webcam mirrors, so the label is the
-// wrong way round. Same rule the archery stance follows.
+// This used to build the palm from the tracker's MIRRORED landmarks and then
+// point it with the CAMERA's axes, with a -1 bolted on to cancel the chirality
+// that produced. Three wrongnesses stacked into something that looked right
+// from one angle: a mirrored hand, a frame that swung whenever the duel moved
+// its lens, and a sign compensating for both.
 //
-// A hand that is not being tracked opens rather than freezing, because a hand
-// held shut by a dropout is a hand the player cannot see themselves controlling.
-const _curls = { left: {}, right: {} };
-const _palmAlong = { left: new THREE.Vector3(), right: new THREE.Vector3() };
-const _palmAcross = { left: new THREE.Vector3(), right: new THREE.Vector3() };
-// ── The palm arrives mirrored, and this is where it is put back ──
-//
-// tracker.js un-mirrors x once on the way in, which is right for POSITION: it
-// is what makes the tracked point sit under the hand you can see in the selfie.
-// But negating one axis also flips the CHIRALITY of the landmark cloud, and a
-// palm frame is chirality-sensitive in a way a position is not -- so the wrist
-// came out rolling the opposite way to the player's.
-//
-// -1 mirrors it back. If the palm ever rolls the wrong way again, this is the
-// one number to flip, and the check takes five seconds: hold a palm at the lens
-// and turn it over. Deliberately NOT applied inside tracker.js, because every
-// other consumer wants the un-mirrored x it already gets.
-const PALM_HANDEDNESS = -1;
-
-const _camRight = new THREE.Vector3();
-const _camUp = new THREE.Vector3();
-const _camForward = new THREE.Vector3();
-
-/**
- * A direction in the tracker's space, pointed the same way in the world.
- *
- * The landmarks live in the picture: x across it, y DOWN it, z into it. Those
- * are the camera's own axes, so the direction is just that triple read against
- * the camera's basis -- and it goes through the same castCamera the hand target
- * is unprojected with, or the palm would face somewhere the hand is not.
- */
-function trackedDirection(v, out) {
-  castCamera.matrixWorld.extractBasis(_camRight, _camUp, _camForward);
-  // extractBasis gives the camera's +Z, which points BEHIND a three.js camera.
-  return out.set(0, 0, 0)
-    .addScaledVector(_camRight, v.x * PALM_HANDEDNESS)
-    .addScaledVector(_camUp, -v.y)
-    .addScaledVector(_camForward, -v.z)
-    .normalize();
-}
+// The fingers were never affected -- a curl is a ratio of distances and does
+// not care which way round the world is -- which is why this survived so long
+// and why the symptom was a correct hand sitting at a wrong ANGLE on the end of
+// a correctly placed arm. See js/spell-room/body-map.js.
 
 /**
  * Which of the player's hands drives this side of the duelist.
@@ -1960,7 +1926,10 @@ function driveFingers(frame) {
   const hands = frame.hands ?? [];
   for (const side of ['left', 'right']) {
     const hand = handFor(hands, side);
-    playerAvatar.fingers(side, hand ? fingerCurls(hand.landmarks, _curls[side]) : null);
+    // The same un-flipped landmarks the palm uses. A curl does not care either
+    // way, but two call sites reading the same hand through different spaces is
+    // how this file drifted from the mirror in the first place.
+    playerAvatar.fingers(side, hand ? fingerCurls(body.unflip(hand.landmarks), _curls[side]) : null);
   }
 }
 
@@ -1982,12 +1951,12 @@ function drivePalms(frame) {
     // tracker's space is mirrored and the duelist's is not, so a normal would
     // arrive pointing out of the wrong side of the hand. The duelist crosses
     // these two itself, in its own space, where the handedness is known.
-    const basis = hand ? palmBasis(hand.landmarks) : null;
+    const basis = hand ? palmBasis(body.unflip(hand.landmarks)) : null;
     if (basis) {
       playerAvatar.palm(
         side,
-        trackedDirection(basis.along, _palmAlong[side]),
-        trackedDirection(basis.across, _palmAcross[side]),
+        body.direction(basis.along, _palmAlong[side]),
+        body.direction(basis.across, _palmAcross[side]),
       );
     } else {
       playerAvatar.palm(side, null, null);
