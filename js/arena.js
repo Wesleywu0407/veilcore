@@ -1512,8 +1512,9 @@ function updateHand(now) {
     return;
   }
   const frame = getFrame();
-  // The pose goes across too: the guard is now both hands raised, which is a
-  // posture measured against the shoulder line rather than a count of fingers.
+  // The pose goes across too: the guard is a posture measured against the
+  // shoulder line -- raised hands AND a fist held up, since a cast has both
+  // hands in the air as well and the posture alone cannot tell them apart.
   const mode = inputMode.update(frame.hands, frame.pose);
 
   const seen = body.drive(frame);
@@ -2048,6 +2049,7 @@ function drawSelfie(frame) {
 // until it is a complaint.
 const _strokeTip = new THREE.Vector3();
 const _strokePoint = new THREE.Vector3();
+const _handScreen = [0, 0];
 
 /**
  * A point of the stroke, put where the hand that drew it would have been.
@@ -2091,7 +2093,7 @@ function tipCorrection(frame, out) {
   if (!playerAvatar.fingertipWorld(_strokeTip)) return out;
   _strokeTip.project(camera);
   if (_strokeTip.z > 1) return out;
-  const hand = strokeScreen(frame.tip, [0, 0]);
+  const hand = strokeScreen(frame.tip, _handScreen);
   if (!hand) return out;
   out[0] = (_strokeTip.x * 0.5 + 0.5) * innerWidth - hand[0];
   out[1] = (-_strokeTip.y * 0.5 + 0.5) * innerHeight - hand[1];
@@ -2196,21 +2198,52 @@ function drawBowLayer(frame, bow) {
 
 const _fix = [0, 0];
 const _screen = [0, 0];
+// Screen positions for the stroke plus the live tip, grown once and reused --
+// this runs every frame of every cast, and forty little arrays a frame is forty
+// little arrays a frame.
+const _sx = [];
+const _sy = [];
+
+/**
+ * Place the stroke and the live tip on the glass, and say which space they
+ * ended up in.
+ *
+ * Chosen ONCE for the whole layer, deliberately. Asked per point, a rune whose
+ * far edge passed behind the lens came out with some points on the arm and the
+ * rest in flat tip space -- the same line drawn in two coordinate systems,
+ * which tears it in half across the screen rather than degrading. All or
+ * nothing: if any point cannot be placed, every one of them falls back to where
+ * this drew before there was a body to hang it on.
+ */
+function placeStroke(points, tip, fix) {
+  const n = points.length;
+  let placed = true;
+  for (let i = 0; i <= n; i++) {
+    const at = i < n ? points[i] : tip;
+    const world = placed ? strokeScreen(at, _screen) : null;
+    if (!world) {
+      placed = false;
+      _sx[i] = at.x * innerWidth;
+      _sy[i] = at.y * innerHeight;
+      continue;
+    }
+    _sx[i] = world[0] + fix[0];
+    _sy[i] = world[1] + fix[1];
+  }
+  if (placed) return true;
+  // One of them failed partway through; redo the ones already written.
+  for (let i = 0; i <= n; i++) {
+    const at = i < n ? points[i] : tip;
+    _sx[i] = at.x * innerWidth;
+    _sy[i] = at.y * innerHeight;
+  }
+  return false;
+}
 
 function drawHandLayer(frame, gate, cast) {
   if (!frame.tracked) return;
-  const fix = tipCorrection(frame, _fix);
-  // One projector for every mark on this layer, so the stroke, the preview and
-  // the cursor cannot end up in three different places. Flat tip space is the
-  // fallback, and it is what all of this did before there was a body to hang
-  // it on.
-  const put = at => {
-    const world = strokeScreen(at, _screen);
-    return world
-      ? [world[0] + fix[0], world[1] + fix[1]]
-      : [at.x * innerWidth, at.y * innerHeight];
-  };
   const points = currentStroke();
+  placeStroke(points, frame.tip, tipCorrection(frame, _fix));
   if (points.length > 1) {
     const swell = 1 + (cast.phase === 'charging' ? cast.charge : 0) * 1.4;
     // Detection runs at ~30Hz, so a circle arrives as roughly forty points. Join
@@ -2222,9 +2255,8 @@ function drawHandLayer(frame, gate, cast) {
     // Projected once each, not once per pass: three strokes over the same
     // forty points is a hundred and twenty camera projections a frame for a
     // line that has not moved between them.
-    const screen = points.map(put);
-    const px = i => screen[i][0];
-    const py = i => screen[i][1];
+    const px = i => _sx[i];
+    const py = i => _sy[i];
     for (const pass of [{ width: 18, alpha: 0.12 }, { width: 8, alpha: 0.32 }, { width: 2.4, alpha: 1 }]) {
       ctx.beginPath();
       ctx.moveTo(px(0), py(0));
@@ -2242,7 +2274,8 @@ function drawHandLayer(frame, gate, cast) {
     ctx.globalAlpha = 1;
   }
 
-  const [x, y] = put(frame.tip);
+  const x = _sx[points.length];
+  const y = _sy[points.length];
 
   // Live verdict while the stroke is still being drawn. Recognition only ever
   // spoke at the end, so a stroke going wrong looked exactly like a stroke that
