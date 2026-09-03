@@ -16,9 +16,10 @@ import assert from "node:assert/strict";
 import {
   resample, normalizeStroke, templateDistance, recognize, bestMatch, ringLoopAssist,
   isPinching, boundingBox, pathLength, RUNES, TUNE,
-  updateCast, resetMagic,
+  updateCast, resetMagic, updateStroke, currentStroke, TIP_FILTER,
 } from "../js/spell-room/magic.js";
 import { LM, dist } from "../js/spell-room/vec.js";
+import { makeSteady } from "../js/spell-room/one-euro.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -188,6 +189,85 @@ test("recognize holds up against a shaky hand", () => {
       `${rune.name} only recognised ${(rate * 100).toFixed(0)}% of the time. ` +
       `Do not fix this by lowering TUNE.SCORE_FLOOR — change the template shape.`);
   }
+});
+
+test("a rune survives its own smoothing, and slower survives better", () => {
+  // The jitter tests above perturb a rune's CONTROL POINTS and trace the
+  // result. That is a shaky SHAPE, and no filter ever sees it. The game's tip
+  // is filtered per frame before the recogniser ever gets it, so this walks the
+  // rune at 30Hz with noise on every sample, runs it through the real
+  // TIP_FILTER and the real stroke gate, and asks the real question.
+  //
+  // It exists because the filter turned out to cost about a quarter of the
+  // score, which nothing here could have caught: TIP_FILTER used to live in
+  // tracker.js, which needs a camera and cannot be imported.
+  const rand = rng(20260903);
+  const walkedAt = (rune, frames) => {
+    const span = 0.30;                       // a rune fills about a third of the view
+    const pts = rune.points.map(p => ({ x: 0.5 + (p.x - 0.5) * span, y: 0.5 + (p.y - 0.5) * span }));
+    const path = trace(pts, Math.ceil(frames / (pts.length - 1)));
+    const fx = makeSteady(TIP_FILTER), fy = makeSteady(TIP_FILTER);
+    let t = 0;
+    updateStroke(false, { x: 0, y: 0 }, t);
+    for (const p of path) {
+      t += 1000 / 30;
+      const nx = p.x + (rand() - 0.5) * 2 * 0.002;
+      const ny = p.y + (rand() - 0.5) * 2 * 0.002;
+      updateStroke(true, { x: fx.filter(nx, t), y: fy.filter(ny, t) }, t);
+    }
+    const drawn = currentStroke().slice();
+    updateStroke(false, { x: 0, y: 0 }, t + 40);
+    return bestMatch(drawn);
+  };
+
+  for (const rune of RUNES) {
+    // Drawn at an unhurried pace, every rune still casts through its own filter.
+    const slow = walkedAt(rune, 80);
+    assert.ok(slow && slow.rune.id === rune.id && slow.ready,
+      `${rune.name} does not survive TIP_FILTER even drawn slowly` +
+      ` (${slow ? slow.score.toFixed(3) : 'no match'}). The filter's lag rounds` +
+      ` the corners off; do not answer this by lowering TUNE.SCORE_FLOOR.`);
+
+    // And the lag is what costs it, so drawing faster must score strictly less.
+    const quick = walkedAt(rune, 33);
+    assert.ok(quick && quick.score < slow.score,
+      `${rune.name} scored no worse drawn twice as fast — TIP_FILTER is not` +
+      ` doing anything, or the walk is not actually faster`);
+  }
+});
+
+test("the tip deadband holds a still hand still, which the lowpass cannot", () => {
+  // The whole reason TIP_FILTER carries a deadband. A hand held still still has
+  // the model's wobble on it, and without the deadband that wobble reaches the
+  // screen as a cursor that will not sit down.
+  // Its own generator, so the numbers are reproducible without reaching into
+  // Math.random -- every other test in this process shares that one.
+  let seed = 0;
+  const noise = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return (seed / 2147483648 - 0.5) * 2 * 0.002;
+  };
+
+  const still = filter => {
+    let last = null, moved = 0;
+    for (let i = 1; i <= 120; i++) {
+      const out = filter.filter(0.5 + noise(), i * (1000 / 30));
+      if (last !== null) moved += Math.abs(out - last);
+      last = out;
+    }
+    return moved / 119;
+  };
+
+  seed = 0;
+  const withBand = still(makeSteady(TIP_FILTER));
+  seed = 0;
+  const without = still(makeSteady({ ...TIP_FILTER, deadband: 0 }));
+
+  assert.ok(withBand < without / 10,
+    `the deadband barely helped: ${withBand.toExponential(2)} vs ${without.toExponential(2)}`);
+  // Under a tenth of a pixel per frame on a 1920 window.
+  assert.ok(withBand * 1920 < 0.1,
+    `a still cursor still drifts ${(withBand * 1920).toFixed(2)}px a frame`);
 });
 
 test("recognize never returns the wrong spell under jitter", () => {

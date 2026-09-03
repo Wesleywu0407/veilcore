@@ -17,11 +17,12 @@
 //      than a room with no webcam.
 
 import { LM, dist } from "./vec.js";
+import { TIP_FILTER } from "./magic.js";
 import {
   readPose, readHead, headPitch, createHeadLevel,
   sideOfWrist, createSideLatch, createLatch, handsCrossed, sideOf,
 } from "./pose.js";
-import { makeOneEuro, makeSteady } from "./one-euro.js";
+import { makeSteady } from "./one-euro.js";
 
 export { LM, dist };
 
@@ -100,15 +101,12 @@ const crossed = createLatch();
 // slow (where jitter is what you notice) and almost none while it is fast
 // (where lag is what you notice).
 
-const TIP_FILTER = {
-  minCutoff: 1.2,   // lower = smoother when still
-  beta: 0.015,      // higher = less lag when moving fast
-  dCutoff: 1.0,
-};
-
-
-const tipX = makeOneEuro(TIP_FILTER);
-const tipY = makeOneEuro(TIP_FILTER);
+// TIP_FILTER lives in magic.js, next to the recogniser it feeds -- it is a
+// recognition parameter and a large one, and the numbers are there. `makeSteady`
+// and not `makeOneEuro`: the deadband is the half that holds a still hand still,
+// which is the same conclusion the anchor filter below reaches from measurement.
+const tipX = makeSteady(TIP_FILTER);
+const tipY = makeSteady(TIP_FILTER);
 
 // ── Why an arm follows the WRIST and not the fingertip ──
 //

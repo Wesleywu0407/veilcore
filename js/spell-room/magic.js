@@ -18,6 +18,38 @@
 // `clamp` is unused until you write recognize() — that is where it belongs.
 import { LM, dist, dist3, clamp } from "./vec.js";
 
+// ─── How much the wand tip is smoothed ───────────────────────────────────────
+//
+// This lives here, beside the recogniser, and not in tracker.js with the pose
+// and anchor filters -- because it is a RECOGNITION parameter, and it is not a
+// small one. Measured, on a synthetic rune walked at 30Hz with the hand model's
+// own wobble on every sample, against the score recognize() gives it:
+//
+//                      no filter   through this one
+//   drawn over 2.7s      0.98            0.88
+//   drawn over 1.7s      0.97            0.81
+//   drawn over 1.1s      0.98            0.72
+//   drawn over 0.7s      0.96            0.64   -- two of three runes REFUSED
+//
+// The lag rounds the corners off, and the faster you draw the more it takes.
+// A filter that can decide whether a spell casts belongs where the tests that
+// judge casting can see it; in tracker.js no test could import it at all.
+//
+// `deadband` is the half of this that holds a still hand still, and it is what
+// the lowpass alone cannot do -- see the note on ANCHOR_FILTER. 0.002 is the
+// hand model's own residual wobble on a hand being held still, so it is sized
+// to the noise rather than chosen: it takes a still cursor from 0.39 pixels of
+// buzz per frame to 0.01, and costs 0.01 of recognition score. The arm's 0.005
+// is stiller still and costs three times as much, on the rune that has the
+// least to spare. Half the 0.004 the stroke gate uses, deliberately, so it
+// cannot decide which points get recorded.
+export const TIP_FILTER = {
+  minCutoff: 1.2,   // lower = smoother when still
+  beta: 0.015,      // higher = less lag when moving fast
+  dCutoff: 1.0,
+  deadband: 0.002,
+};
+
 // ─── Tuning ───────────────────────────────────────────────────────────────────
 // One place for every magic number. If you find yourself typing a threshold
 // somewhere else in this file, it belongs up here instead.
