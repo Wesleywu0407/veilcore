@@ -1960,10 +1960,24 @@ function drawSelfie(frame) {
   if (rect.width < 2 || rect.height < 2) return;
 
   const hands = frame.hands ?? [];
-  // Two hands no longer mean one thing, so this reads the live mode rather than
-  // counting hands and assuming.
-  const mode = hands.length === 2 ? (fistMode ? 'FIST' : 'BOW')
-    : hands.length === 1 ? 'RUNES' : 'SHOW HANDS';
+  // ── What the duel will actually let you do ──
+  //
+  // This counted hands and assumed, under a comment claiming it did not. One
+  // hand said RUNES, which since the rune hand needed the left hand's
+  // permission has meant the opposite of the truth -- one hand is the state in
+  // which you cannot draw at all. Two hands said BOW whenever the fists were
+  // down, including while you were casting.
+  //
+  // The live flags are the answer: they are what updateHand() set on its way
+  // through, so the panel cannot disagree with the branch that ran.
+  const mode = !hands.length ? 'SHOW HANDS'
+    : fistMode ? 'FIST'
+    : bowMode ? 'BOW'
+    : inputMode.sign === 1 ? 'RUNES'
+    // In the rune mode and not allowed to draw. Naming the missing thing rather
+    // than the mode is the whole point of the row: "RUNES" over a hand that
+    // will not draw is worse than no label at all.
+    : 'LEFT HAND 1';
   const x = point => rect.left + point.x * rect.width;
   const y = point => rect.top + point.y * rect.height;
 

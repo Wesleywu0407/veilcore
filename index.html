@@ -366,7 +366,10 @@
 
     <footer class="arena-foot">
       <div class="arena-controls">
-        <span><b>WASD</b> Move</span><span><b>1 HAND</b> Draw runes</span><span><b>2 HANDS</b> Draw bow</span>
+        <!-- The rune hand needs the other one's permission now, so "1 HAND draw
+             runes" says the opposite of the truth: one hand is the state you
+             CANNOT draw in. This is the first line anybody reads. -->
+        <span><b>WASD</b> Move</span><span><b>LEFT HAND 1</b> Draw runes</span><span><b>LEFT HAND 2</b> Draw bow</span>
       </div>
       <span class="arena-runes arena-sigil" data-arena-runes></span>
     </footer>
