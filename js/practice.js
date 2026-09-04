@@ -753,6 +753,58 @@ function drawPreview(frame, bow) {
   }
 }
 
+// ─── One line, in the middle, saying what to do next ─────────────────────────
+//
+// Everything this room knows how to teach was already written down -- in the
+// card in the corner, in prose, in a serif, at eleven pixels. That is a fine
+// place for it right up until the moment somebody stands two metres back with
+// both hands in the air, which is the only position from which this room is
+// used. You cannot read a paragraph while aiming, and you should not have to:
+// there is exactly one thing to do at any moment and the range knows which.
+//
+// So the card explains, and this INSTRUCTS -- one step at a time, in the middle
+// of the screen, big enough to read from where you are standing. It goes quiet
+// the moment the bow is drawn and ready, because at that point the crosshair is
+// the only thing worth looking at and a caption over it is noise.
+const STEPS = Object.freeze({
+  camera:  'PRESS H TO START THE CAMERA',
+  hands:   'BOTH HANDS IN FRAME',
+  sign:    'TWO FINGERS ON YOUR BOW HAND',
+  nock:    'CLOSE YOUR OTHER HAND ON THE STRING',
+  draw:    'PULL YOUR HANDS APART',
+  hold:    'HOLD IT STILL',
+  loose:   'OPEN YOUR STRING HAND TO LOOSE',
+});
+
+/** Which one of them is true right now. Null once there is nothing to say. */
+function currentStep(frame, bow, armed) {
+  if (!tracking) return STEPS.camera;
+  const hands = frame.hands?.length ?? 0;
+  if (hands < 2) return STEPS.hands;
+  if (!armed) return STEPS.sign;
+  if (bow?.phase !== 'nocked') return STEPS.nock;
+  // Draw first, then the hold: pulling apart while being told to hold still is
+  // two instructions at once, and the draw is the one that is not finished.
+  if (bow.draw < 0.45) return STEPS.draw;
+  if (bow.held < MIN_HOLD_MS) return STEPS.hold;
+  return STEPS.loose;
+}
+
+function drawStep(frame, bow, armed) {
+  const step = currentStep(frame, bow, armed);
+  if (!step) return;
+  // Low and centred: out of the way of the targets, above the key legend, and
+  // on the line your eye already travels down when you look at your own hands.
+  const ready = step === STEPS.loose;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.letterSpacing = '0.22em';
+  ctx.font = `${ready ? 700 : 500} 15px 'IBM Plex Mono', monospace`;
+  ctx.fillStyle = ready ? GOLD : '#93a1bd';
+  ctx.fillText(step, innerWidth / 2, innerHeight - 74);
+  ctx.restore();
+}
+
 // ─── Panel ───────────────────────────────────────────────────────────────────
 
 function line(text, x, y, colour = DIM, size = 11) {
@@ -768,6 +820,7 @@ function drawPanel(frame, bow, bowSign, armed) {
   ctx.letterSpacing = '0.08em';
 
   drawScore();
+  drawStep(frame, bow, armed);
   if (showPanel) drawReadout(frame, bow, bowSign, armed);
 
   // ── The crosshair, and the wait around it ──
