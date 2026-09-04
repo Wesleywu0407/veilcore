@@ -3,7 +3,23 @@
 Made for `practice.html`, and kept apart from `../arena/` because nothing in the
 duel uses them.
 
-## `target.glb` — the archery target face
+## `target.glb` — the archery target face — **NOT IN USE**
+
+It loads, it fits, and it costs what it should. It also reads as a **doughnut**:
+the rings are stepped into the geometry and the bullseye was painted deep
+violet, so the middle of every target is a black hole and there is nothing to
+aim at. practice.js keeps its procedural rings until this is fixed.
+
+What to change on the next attempt:
+
+- **Ask for a flat disc with no relief at all** -- no grooves, no steps, no
+  raised bands. Stepped rings catch the range's low light and turn into
+  shadowed trenches. Let the TEXTURE do every ring; it is a flat painted face in
+  real life too.
+- **The bullseye must be the brightest thing on it**, not the darkest. Gold or
+  bone white in the centre. Deep violet in the middle of a dark room is a hole.
+- **Less violet overall.** The outer band swallowed the disc.
+
 
 Meshy text-to-3D, 2026-09-04, then shrunk. **1,524 triangles, one primitive, one
 material, three 1024² JPEGs, 0.76 MB.** Inside the budget in PLAN.md.

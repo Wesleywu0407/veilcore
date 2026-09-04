@@ -173,6 +173,8 @@ const RING_COLOURS = [0xffd98a, 0xe8e4dc, 0x9b87ff];
 function buildTarget({ z, x = 0, y = 2.6, radius = 1.5, sway = 0 }) {
   const group = new THREE.Group();
   group.position.set(x, y, z);
+  // Kept as a group of its own: the Meshy face will hide these rather than
+  // replace them, so a frame where the asset has not arrived still has targets.
   const fallback = new THREE.Group();
   group.add(fallback);
   RING_COLOURS.forEach((colour, i) => {
@@ -193,47 +195,12 @@ function buildTarget({ z, x = 0, y = 2.6, radius = 1.5, sway = 0 }) {
   return { group, fallback, radius, home: x, sway, hitAt: -Infinity };
 }
 
-// ─── The face, from Meshy ────────────────────────────────────────────────────
-//
-// One fetch, one geometry and one material for all four targets: loadGLB caches
-// by URL, and every target clones the same loaded scene rather than asking for
-// its own. Four copies of one mesh is four draw calls against the sixteen the
-// procedural rings were costing.
-//
-// Fitted by its own bounding box rather than by a number typed in here, so the
-// disc lines up with the `radius` the scoring ray uses whatever scale it was
-// exported at. A model whose picture disagrees with its hit box is worse than
-// no model.
-const TARGET_MODEL = 'assets/models/range/target.glb';
-
-loadGLB(TARGET_MODEL).then(gltf => {
-  const source = gltf.scene;
-  const box = new THREE.Box3().setFromObject(source);
-  const size = new THREE.Vector3();
-  box.getSize(size);
-  const across = Math.max(size.x, size.y) || 1;
-
-  for (const target of targets) {
-    const face = source.clone(true);
-    // The box is not centred on the origin in every export; put the middle of
-    // the disc on the group's own origin, which is what the ray aims at.
-    const centre = new THREE.Vector3();
-    box.getCenter(centre);
-    const scale = (target.radius * 2) / across;
-    face.scale.setScalar(scale);
-    face.position.copy(centre).multiplyScalar(-scale);
-    face.traverse(node => { node.castShadow = false; node.receiveShadow = false; });
-    target.group.add(face);
-    // Only now: the rings were the answer until this frame.
-    target.fallback.visible = false;
-  }
-  status = 'targets loaded';
-}).catch(() => {
-  // Left with the rings, which is why they are still here. Said out loud rather
-  // than swallowed -- a range that quietly looks like programmer art is a range
-  // nobody knows is broken.
-  status = 'target model failed — using rings';
-});
+// The Meshy face is NOT wired in. assets/models/range/target.glb loads, fits and
+// costs what it should -- and it reads as a doughnut: the rings are stepped into
+// the geometry and the bullseye was painted deep violet, so the middle of every
+// target is a black hole. A target you cannot find the centre of is worse than
+// programmer art, so the rings below are what ships until the model is right.
+// See the README beside the asset for what to change in the prompt.
 
 const targets = [
   buildTarget({ z: 18, x: -5, radius: 1.7 }),
