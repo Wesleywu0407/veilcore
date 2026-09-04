@@ -550,8 +550,7 @@ function drawScan(frame) {
   // The face the tracker is reading. Shared with the duel's panel, so the two
   // cannot answer "is it seeing my face" differently. See draw-face.js.
   if (!drawFace(scanCtx, frame.head, at, { live: GOLD, cold: RED }) && showCamera) {
-    scanCtx.font = '10px "IBM Plex Mono", monospace';
-    scanCtx.fillText('no face', 6, 14);
+    label('no face', 6, 14, RED, w);
   }
 
   const pose = frame.pose;
@@ -574,13 +573,31 @@ function drawScan(frame) {
   }
 
   if (frame.head) {
-    scanCtx.fillStyle = frame.head.levelled ? GOLD : RED;
-    scanCtx.font = '10px "IBM Plex Mono", monospace';
-    scanCtx.save();
-    scanCtx.scale(-1, 1);        // undo the CSS mirror, or the text reads backwards
-    scanCtx.fillText(`${(frame.head.yaw * 180 / Math.PI).toFixed(0)}°`, -w + 6, 14);
-    scanCtx.restore();
+    const degrees = (frame.head.yaw * 180 / Math.PI).toFixed(0);
+    label(`${degrees}°`, 6, 14, frame.head.levelled ? GOLD : RED, w);
   }
+}
+
+/**
+ * A word on the scan, the right way round.
+ *
+ * The canvas is flipped by CSS so the landmarks land over a mirrored picture,
+ * and everything drawn into it inherits that -- text included, which comes out
+ * backwards. The yaw readout below knew this and undid it inline; `no face` did
+ * not, and read as `ecaf on` for as long as it has existed. One of the two
+ * places that needs the trick having it is how that happens, so now neither
+ * does it and this does.
+ *
+ * `x` still means "from the left of the box as you see it".
+ */
+function label(text, x, y, colour, w) {
+  scanCtx.save();
+  scanCtx.translate(w, 0);
+  scanCtx.scale(-1, 1);
+  scanCtx.font = '10px "IBM Plex Mono", monospace';
+  scanCtx.fillStyle = colour;
+  scanCtx.fillText(text, x, y);
+  scanCtx.restore();
 }
 
 // Where this face's level lives between sessions, so it is asked for once.
