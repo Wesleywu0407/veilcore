@@ -17,7 +17,34 @@
        stretching it, and on a 2x display you see the top-left quarter. */
     .range-gl { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; }
     .range-overlay { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
-    .range-video { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; top: 0; left: 0; }
+    /* ── The camera, shown ──
+       It was a 1x1 transparent pixel: enough to feed the tracker and useless to
+       the person being tracked, who cannot tell a lost hand from a wrong mapping
+       without seeing what the lens saw. On a range whose whole job is to say
+       whether the bow is reading you, that was the one missing answer -- you
+       could not tell "it did not see the sign" from "it saw it and refused".
+       Mirrored, because a preview of yourself that is not mirrored is the one
+       thing everybody finds unusable. C toggles it. */
+    .range-video {
+      position: fixed; right: 18px; top: 18px; width: 232px;
+      transform: scaleX(-1); border-radius: 6px; opacity: .9;
+      border: 1px solid #2a3350; pointer-events: none; z-index: 2;
+      background: #05070d;
+    }
+    /* Tucked away, NOT display:none. The tracker reads frames out of this
+       element and a display:none video is allowed to stop producing them --
+       which is why it was a 1x1 pixel before it was ever shown, and why hiding
+       it has to put it back to one rather than remove it. */
+    .range-video.is-tucked {
+      width: 1px; height: 1px; opacity: 0; border: 0; right: 0; top: 0;
+    }
+    /* The landmarks go on top of it, in its own coordinates. */
+    .range-scan {
+      position: fixed; right: 18px; top: 18px; width: 232px;
+      transform: scaleX(-1); border-radius: 6px;
+      pointer-events: none; z-index: 3;
+    }
+    .range-scan[hidden] { display: none; }
     /* ── The pause panel ──
        Escape opens this rather than leaving outright: navigating away on a
        single keypress is not something a page should do while you are standing
@@ -127,6 +154,7 @@
   <canvas class="range-gl" data-range-gl></canvas>
   <canvas class="range-overlay" data-range-overlay></canvas>
   <video class="range-video" data-range-video playsinline muted autoplay></video>
+  <canvas class="range-scan" data-range-scan hidden></canvas>
 
   <div class="range-menu" data-range-menu hidden>
     <div class="range-menu-box" role="dialog" aria-modal="true" aria-labelledby="range-menu-title">

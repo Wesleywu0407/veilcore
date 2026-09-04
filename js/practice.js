@@ -13,6 +13,8 @@ import { sideOf } from './spell-room/pose.js';
 import { createSignState, handSign } from './spell-room/hand-sign.js';
 import { createBowAim, createFocus, FOCUS } from './spell-room/aim.js';
 import { createBowView } from './arena/bow-view.js';
+import { drawHand } from './spell-room/draw-hand.js';
+import { drawFace } from './spell-room/draw-face.js';
 import { loadGLB } from './arena/asset-library.js';
 
 const GOLD = '#ffd98a';
@@ -89,6 +91,8 @@ const FOV_EASE = 5;
 const glCanvas = document.querySelector('[data-range-gl]');
 const overlay = document.querySelector('[data-range-overlay]');
 const video = document.querySelector('[data-range-video]');
+const scan = document.querySelector('[data-range-scan]');
+const scanCtx = scan?.getContext('2d');
 const errorLine = document.querySelector('[data-range-error]');
 const menuPanel = document.querySelector('[data-range-menu]');
 const menuResume = document.querySelector('[data-range-resume]');
@@ -249,6 +253,11 @@ let wantFov = FOV_SLACK;
 // without seeing what the bow is measuring -- but eleven rows of diagnostics
 // between a player and the targets is the wrong default once they are chosen.
 let showPanel = false;
+// The camera preview. On by default: the first question anybody has at a range
+// is whether it can see them, and the readout cannot answer it -- a panel that
+// says "show 2 fingers on the bow hand" looks identical whether the hand is
+// unseen or seen and reading three.
+let showCamera = true;
 let cvFrames = 0, cvAt = 0, cvHz = 0, lastFrameAt = 0;
 
 // 0 loose, 1 fully settled. Held across frames; only a nock starts it over.
@@ -417,6 +426,7 @@ function loop(now) {
     }
   }
 
+  drawPreview(frame, bow);
   drawPanel(frame, bow, bowSign, armed);
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
@@ -470,6 +480,70 @@ function readBowSign(hands) {
   return { side, sign: handSign(read.bow.landmarks, signs[side]) };
 }
 
+// ─── The preview ─────────────────────────────────────────────────────────────
+//
+// What the lens sees, with what the tracker made of it drawn on top. The two
+// have to be in the same picture: a skeleton alone cannot tell you the model has
+// locked onto the lamp behind you, and a picture alone cannot tell you the
+// skeleton is a hand's width off.
+//
+// The bow hand is coloured differently from the string hand, and the colour is
+// archery.js's OWN answer rather than a second guess -- so if the range has the
+// two the wrong way round, this is where you see it, and you see it before you
+// have wasted ten arrows wondering why the draw will not read.
+const BOW_HAND = '#ffd98a';
+const STRING_HAND = '#8cc9ff';
+const LOST = '#ff6b6b';
+
+function drawPreview(frame, bow) {
+  if (!scan || !scanCtx) return;
+  video.classList.toggle('is-tucked', !showCamera);
+  scan.hidden = !showCamera;
+  if (!showCamera || !video.videoWidth) return;
+
+  const w = video.clientWidth || 232;
+  const h = Math.round(w * video.videoHeight / video.videoWidth);
+  if (scan.width !== w || scan.height !== h) { scan.width = w; scan.height = h; }
+  scan.style.height = `${h}px`;
+  scanCtx.clearRect(0, 0, w, h);
+
+  // The tracker un-mirrors x on the way in and the preview is mirrored back by
+  // CSS, so these go on flipped, which lands them over the real thing.
+  const at = p => [(1 - p.x) * w, p.y * h];
+
+  const hands = frame.hands ?? [];
+  for (const hand of hands) {
+    // Which hand archery.js decided is holding the bow. Compared by the WRIST
+    // it handed out rather than by side: `bowWrist` is the very object off that
+    // hand, and taking its answer is the point -- deciding handedness a second
+    // time here is how a panel ends up disagreeing with the shot. Only
+    // meaningful with a pair; with one hand there is nothing to be the other.
+    const isBow = Boolean(bow && hands.length === 2 && hand.wrist === bow.bowWrist);
+    const colour = hands.length === 2 ? (isBow ? BOW_HAND : STRING_HAND) : '#d9e2f2';
+    drawHand(scanCtx, hand, at, { bone: colour, tip: '#57e08a' }, 2);
+  }
+  drawFace(scanCtx, frame.head, at, { live: BOW_HAND, cold: LOST }, 2);
+
+  // ── And it must say when it sees nothing ──
+  //
+  // A blank preview is ambiguous in the one way that matters: a camera that
+  // failed and a camera watching an empty room look the same. Naming it is the
+  // difference between "move into frame" and "something is broken".
+  scanCtx.font = "500 10px 'IBM Plex Mono', monospace";
+  if (!hands.length) {
+    scanCtx.fillStyle = LOST;
+    scanCtx.fillText(tracking ? 'no hands' : 'camera off — H', 6, 14);
+  } else if (hands.length === 1) {
+    scanCtx.fillStyle = '#b8894a';
+    scanCtx.fillText('one hand — the bow needs two', 6, 14);
+  } else {
+    scanCtx.fillStyle = BOW_HAND;
+    scanCtx.fillText('bow', 6, 14);
+    scanCtx.fillStyle = STRING_HAND;
+    scanCtx.fillText('string', 34, 14);
+  }
+}
+
 // ─── Panel ───────────────────────────────────────────────────────────────────
 
 function line(text, x, y, colour = DIM, size = 11) {
@@ -521,7 +595,8 @@ function drawPanel(frame, bow, bowSign, armed) {
   ctx.textAlign = 'right';
   line(status, w - 26, h - 26, GOLD, 12);
   ctx.textAlign = 'left';
-  line('ESC  menu      R  reset      P  readout      H  retry camera', 26, h - 26, '#5d6b86', 11);
+  line('ESC  menu      R  reset      P  readout      C  camera      H  retry camera',
+    26, h - 26, '#5d6b86', 11);
   ctx.restore();
 }
 
@@ -690,6 +765,7 @@ addEventListener('keydown', (event) => {
   }
   if (event.code === 'KeyR') { shots.fired = 0; shots.hit = 0; shots.lastMiss = null; status = 'counters reset'; }
   if (event.code === 'KeyP') { showPanel = !showPanel; status = showPanel ? 'readout on' : 'readout off'; }
+  if (event.code === 'KeyC') { showCamera = !showCamera; status = showCamera ? 'camera on' : 'camera off'; }
   // A restart, not a toggle -- initTracker tears the old session down itself.
   if (event.code === 'KeyH') void startTracking();
 });
