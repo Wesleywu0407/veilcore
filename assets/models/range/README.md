@@ -3,42 +3,45 @@
 Made for `practice.html`, and kept apart from `../arena/` because nothing in the
 duel uses them.
 
-## `target.glb` — the archery target face — **NOT IN USE**
+## `target.glb` — the archery target face
 
-It loads, it fits, and it costs what it should. It also reads as a **doughnut**:
-the rings are stepped into the geometry and the bullseye was painted deep
-violet, so the middle of every target is a black hole and there is nothing to
-aim at. practice.js keeps its procedural rings until this is fixed.
+Meshy text-to-3D, 2026-09-04. **832 triangles, one primitive, one material,
+three 1024² JPEGs, 0.56 MB.** Inside the budget in PLAN.md.
 
-What to change on the next attempt:
+Colours are the page's own, read out of `:root` in `index.html` rather than
+remembered: `--violet` #9b87ff is a pale LAVENDER, not the deep aubergine a
+first attempt produced, `--paper` #f4eddf is a warm bone white, and `--gold`
+#ffd98a is the accent every emphasis in the UI is already made of. The season is
+called The Porcelain Trials and the duelist is sealed porcelain, so porcelain is
+the material the whole game is speaking.
 
-- **Ask for a flat disc with no relief at all** -- no grooves, no steps, no
-  raised bands. Stepped rings catch the range's low light and turn into
-  shadowed trenches. Let the TEXTURE do every ring; it is a flat painted face in
-  real life too.
-- **The bullseye must be the brightest thing on it**, not the darkest. Gold or
-  bone white in the centre. Deep violet in the middle of a dark room is a hole.
-- **Less violet overall.** The outer band swallowed the disc.
+### What it took, so the next one does not take it again
 
+**Five prompts.** Each failed in a way worth writing down:
 
-Meshy text-to-3D, 2026-09-04, then shrunk. **1,524 triangles, one primitive, one
-material, three 1024² JPEGs, 0.76 MB.** Inside the budget in PLAN.md.
+1. *"A thin round face"* → a **dome**. "Thin" does not stop Meshy inflating.
+2. *"Standing upright on its edge"* → grew a **plinth**. Anything that implies
+   support gets support. Say the object "floats alone and touches nothing".
+3. Rings asked for as geometry → **stepped trenches**, which in the range's low
+   light became shadow, and a bullseye painted deep violet became a black hole.
+   It read as a doughnut and it shipped for about ten minutes.
+4. *"Completely smooth, no relief"* → **still carved the rings**. The word
+   "target" carries ring geometry with it and no amount of NO gets it out.
+5. **What worked: ask for a blank plate.** A "plain blank circular porcelain
+   plate, completely smooth and featureless" has nothing to carve, and then the
+   REFINE step paints every ring on. Geometry from the preview, decoration from
+   the texture -- that split is the whole trick.
 
-Two things about it that are not obvious:
+**The bullseye must be the brightest thing on the object**, stated in capitals
+in the texture prompt. In a dark room anything dark in the middle is a hole, not
+a mark to aim at.
 
-- **It came out at 6.42 MB.** Meshy returns 2048² maps whatever the object is,
-  and this is a disc seen from eighteen to forty-eight metres. Put through
-  `node scripts/glb-shrink.mjs <file> 1024`, which is in the repo precisely so
-  that this step does not get skipped on the next one. The 6.42 MB original was
-  not kept: it is the same geometry with bigger pictures on it, and re-running
-  the shrink from the shipped file would only be lossy twice.
-- **It took three prompts, not one.** The first was a dome, because "thin round
-  face" does not stop Meshy inflating things. The second grew a plinth, because
-  "standing upright on its edge" reads as a request for something to stand on.
-  What worked was naming the geometry -- "like a very thin coin, twenty times as
-  wide as it is thick" -- and saying the object "floats alone and touches
-  nothing" rather than listing what not to add.
+**`texture_prompt` is capped at 800 characters.** The API rejects a longer one
+with a message you only see if you print the raw response.
 
-The rings are geometry, stepped into the front face, and the colour is painted
-on the base map. Practice.js keeps its procedural rings as a fallback for the
-frame where this has not loaded or has failed to.
+**It came out at 5.97 MB.** Meshy returns 2048² maps whatever the object is.
+`node scripts/glb-shrink.mjs <file> 1024` brings it to 0.56 MB; only the shrunk
+file is kept, since re-running the shrink on it would be lossy twice.
+
+Practice.js keeps its procedural rings as a fallback for the frame before this
+has loaded, and for good if it never does.

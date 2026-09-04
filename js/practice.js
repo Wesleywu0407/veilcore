@@ -16,6 +16,7 @@ import { createBowView } from './arena/bow-view.js';
 import { drawHand } from './spell-room/draw-hand.js';
 import { drawFace } from './spell-room/draw-face.js';
 import { loadGLB } from './arena/asset-library.js';
+import { struckScale } from './arena/struck.js';
 
 const GOLD = '#ffd98a';
 const DIM = '#7f899f';
@@ -195,12 +196,44 @@ function buildTarget({ z, x = 0, y = 2.6, radius = 1.5, sway = 0 }) {
   return { group, fallback, radius, home: x, sway, hitAt: -Infinity };
 }
 
-// The Meshy face is NOT wired in. assets/models/range/target.glb loads, fits and
-// costs what it should -- and it reads as a doughnut: the rings are stepped into
-// the geometry and the bullseye was painted deep violet, so the middle of every
-// target is a black hole. A target you cannot find the centre of is worse than
-// programmer art, so the rings below are what ships until the model is right.
-// See the README beside the asset for what to change in the prompt.
+// ─── The face, from Meshy ────────────────────────────────────────────────────
+//
+// One fetch, one geometry, one material for all four: loadGLB caches by URL and
+// each target clones the loaded scene, so this is four draw calls where the
+// procedural rings were sixteen.
+//
+// Fitted by its own bounding box rather than by a number typed in here, so the
+// disc lines up with the `radius` the scoring ray uses whatever scale it was
+// exported at. A model whose picture disagrees with its hit box is worse than no
+// model at all.
+const TARGET_MODEL = 'assets/models/range/target.glb';
+
+loadGLB(TARGET_MODEL).then(gltf => {
+  const source = gltf.scene;
+  const box = new THREE.Box3().setFromObject(source);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const across = Math.max(size.x, size.y) || 1;
+  const centre = new THREE.Vector3();
+  box.getCenter(centre);
+
+  for (const target of targets) {
+    const face = source.clone(true);
+    const scale = (target.radius * 2) / across;
+    face.scale.setScalar(scale);
+    // The exported box is not centred on the origin; put the middle of the disc
+    // on the group's own origin, which is the point the ray aims at.
+    face.position.copy(centre).multiplyScalar(-scale);
+    face.traverse(node => { node.castShadow = false; node.receiveShadow = false; });
+    target.group.add(face);
+    target.fallback.visible = false;   // the rings were the answer until this frame
+  }
+}).catch(() => {
+  // Left with the rings, which is why they are still there. Said out loud rather
+  // than swallowed: a range that quietly looks like programmer art is a range
+  // nobody knows is broken.
+  status = 'target model failed — using rings';
+});
 
 const targets = [
   buildTarget({ z: 18, x: -5, radius: 1.7 }),
@@ -245,6 +278,8 @@ function spawnArrow(origin, direction, speed) {
 // on a flap teaches the flap, not the shot. A second is long enough that the
 // pose has to be arrived at deliberately and short enough that it never becomes
 // the thing you are waiting on.
+// A struck target swells, falls away and comes back: see struck.js, which owns
+// the whole curve and is tested against it.
 const MIN_HOLD_MS = 1000;
 const bowState = createBowState({ minLooseDraw: 0, minHoldMs: MIN_HOLD_MS });
 const bowAim = createBowAim();
@@ -317,6 +352,10 @@ function loose(power) {
   // is only compared against another miss when neither was hit.
   let best = null;
   for (const target of targets) {
+    // Away, so there is nothing there to hit. Without this the ray still finds
+    // the plane of a target that is not on screen, and the score counts an arrow
+    // through an empty space as an inner ring.
+    if (!target.group.visible) continue;
     // Each target is a disc facing the shooter; intersect its plane, then check
     // how far from the centre the arrow crossed it.
     _plane.setFromNormalAndCoplanarPoint(_normal, target.group.position);
@@ -372,9 +411,10 @@ function loop(now) {
 
   for (const target of targets) {
     if (target.sway) target.group.position.x = target.home + Math.sin(now / 1400) * target.sway;
-    const since = now - target.hitAt;
-    const flash = since < 420 ? 1 - since / 420 : 0;
-    target.group.scale.setScalar(1 + flash * 0.12);
+    target.group.scale.setScalar(struckScale(now - target.hitAt));
+    // Scale alone would leave a target that is hit while already gone showing
+    // nothing at all; visibility is what keeps the scoring ray honest about it.
+    target.group.visible = target.group.scale.x > 0.001;
   }
 
   for (let i = arrows.length - 1; i >= 0; i--) {
@@ -456,52 +496,6 @@ function loop(now) {
 }
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
-
-// ─── Taking up the bow ───────────────────────────────────────────────────────
-//
-// Two hands in frame is not a request for a bow. It is what a person looks like
-// when they are standing in front of a webcam, and the range used to hand them
-// one for it -- so the bow was permanently up and the only way to not be
-// holding it was to put a hand behind your back.
-//
-// It is asked for now, the same way the duel asks: the BOW hand holds up two
-// fingers. The string hand does what it always did -- close on the string, pull,
-// open to loose -- and its fingers are deliberately never part of this gate,
-// because opening that hand is the shot. See input-mode.js, which learned that
-// the expensive way.
-//
-// Which hand is which is not decided here. archery.js already picks the string
-// hand as whichever one is closed, and that answer is taken as given rather
-// than guessed at a second time.
-const SIGN_BOW = 2;
-const signs = { left: createSignState(), right: createSignState() };
-
-/**
- * The hand holding the bow, and the count it is showing, or null without two
- * hands to look at.
- *
- * Read every frame whether or not the bow is up: a sign needs SIGN_HOLD frames
- * to settle, and a state left un-updated while the bow is down would answer
- * with whatever it last saw the moment it was consulted again.
- */
-function readBowSign(hands) {
-  // NOTE: the count is deliberately NOT forgotten here, and that is a live bug,
-  // not a decision. A settled two outlives the hand that made it, so the frame a
-  // second hand comes back into view can arm the bow without anyone having asked
-  // -- the same fault input-mode.js was carrying, which forgetSign() exists to
-  // fix. It is left alone only because clearing it changes WHEN the bow comes
-  // up, and that was already demonstrated to somebody. Two lines when it can
-  // change: forgetSign(signs.left) and forgetSign(signs.right).
-  if (hands?.length !== 2) return null;
-  const read = readBow(hands);
-  // By the body where it could say. archery.js keeps `side` sorted by x on
-  // purpose and that is right for the DRAW -- but these two states are indexed
-  // by it, so one frame of the x order flipping would hand each hand the other
-  // one's count.
-  const side = read?.bow ? sideOf(read.bow) : null;
-  if (!side || !signs[side]) return null;
-  return { side, sign: handSign(read.bow.landmarks, signs[side]) };
-}
 
 // ─── The preview ─────────────────────────────────────────────────────────────
 //
