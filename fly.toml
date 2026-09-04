@@ -18,6 +18,20 @@ primary_region = 'sin'
   auto_stop_machines = 'off'
   min_machines_running = 1
 
+  # ── There may only be ONE, and flyctl keeps deleting this line ──
+  #
+  # duel-rooms.mjs keeps its rooms in a plain Map in one process. A code created
+  # on machine A cannot be joined on machine B: the second player is told "room
+  # not found" while the first sits watching a code that works for nobody. It
+  # does not crash, it does not log, and it only happens once there is more than
+  # one machine -- so it will be found by a player and not by a deploy.
+  #
+  # `flyctl` rewrites this file in its own format whenever it is run, and this
+  # line does not survive that. If two-player rooms start failing, look here
+  # FIRST: check that it is still present. Raising it needs the room registry
+  # moved to something shared before, not after.
+  max_machines_running = 1
+
   [[http_service.checks]]
     interval = '30s'
     timeout = '5s'
