@@ -115,6 +115,13 @@ would not cast if you drew them in under a second. Run `npm run tip` before
 changing it and paste the table into the commit; it prints lag, stillness and
 per-rune recognition at four draw speeds.
 
+**`npm run refs` checks three things, and check 3 is the one that catches a bad
+deletion.** A block replacement that takes a helper out while its callers stay
+behind leaves a file that parses, passes every test, and throws the first time
+that line is reached -- which here means the first time somebody turns a CAMERA
+on. `readBowSign` went that way. If you delete by region rather than by name,
+run it.
+
 **Never lower `TUNE.SCORE_FLOOR` to fix a low recognition rate.** That trades a
 false reject for a false accept, which is the wrong direction — change the rune
 shape instead, and re-run `npm run runes` to confirm the shapes stay apart.
