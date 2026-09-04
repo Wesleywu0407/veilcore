@@ -173,12 +173,96 @@ scene.background = new THREE.Color(HAZE);
 
 // ─── The range ───────────────────────────────────────────────────────────────
 
+// ─── The floor, as a range ───────────────────────────────────────────────────
+//
+// It was one flat colour, which is the single biggest reason this room looked
+// like something nobody had finished. A range is not a floor; it is a floor
+// with LANES and DISTANCES on it, and those are the two things the person
+// standing on it needs to read.
+//
+// Painted into a canvas and used as a map, so all of this still costs the one
+// draw call the plain plane cost. No geometry was added to draw a line.
+const FLOOR_SPAN = { x: 60, z: 140, at: 50 };   // the plane, and where it sits
+
+/**
+ * The markings, in the page's own colours.
+ *
+ * Drawn in METRES and converted at the edge, so every number below is the
+ * number you would measure on the ground -- the lane is at seven metres because
+ * the distance posts are at seven metres, not because seven looked right in
+ * pixels.
+ */
+function rangeFloorTexture() {
+  const canvas = document.createElement('canvas');
+  // Long axis gets the resolution: the eye runs down this floor, not across it.
+  canvas.width = 512;
+  canvas.height = 1024;
+  const g = canvas.getContext('2d');
+
+  const near = -20;                                   // the plane's near edge, in metres
+  const u = metres => ((metres + FLOOR_SPAN.x / 2) / FLOOR_SPAN.x) * canvas.width;
+  const v = metres => ((metres - near) / FLOOR_SPAN.z) * canvas.height;
+
+  g.fillStyle = '#1b2236';
+  g.fillRect(0, 0, canvas.width, canvas.height);
+
+  // A wash down the middle, so the lane you shoot along is lighter than the
+  // ground either side of it and the eye is led downrange rather than around.
+  const lane = g.createLinearGradient(u(-9), 0, u(9), 0);
+  lane.addColorStop(0, 'rgba(244,237,223,0)');
+  lane.addColorStop(0.5, 'rgba(244,237,223,0.07)');
+  lane.addColorStop(1, 'rgba(244,237,223,0)');
+  g.fillStyle = lane;
+  g.fillRect(u(-9), 0, u(9) - u(-9), canvas.height);
+
+  // The two lane edges, at the distance posts.
+  g.strokeStyle = 'rgba(244,237,223,0.30)';
+  g.lineWidth = 3;
+  for (const x of [-7, 7]) {
+    g.beginPath();
+    g.moveTo(u(x), v(0));
+    g.lineTo(u(x), v(80));
+    g.stroke();
+  }
+
+  // A bar every ten metres. This is the ruler: without it the far target is
+  // just a smaller near one and there is no way to learn what far looks like.
+  g.strokeStyle = 'rgba(244,237,223,0.16)';
+  g.lineWidth = 2;
+  for (let z = 10; z <= 70; z += 10) {
+    g.beginPath();
+    g.moveTo(u(-7), v(z));
+    g.lineTo(u(7), v(z));
+    g.stroke();
+  }
+
+  // And a brighter one under each target, in gold, so the ruler is marked where
+  // it matters. Read from `targets` would be circular -- they are built after
+  // this -- so the distances are named once here and once there, and a mismatch
+  // shows up as a bar that has nothing standing on it.
+  g.strokeStyle = 'rgba(255,217,138,0.42)';
+  g.lineWidth = 4;
+  for (const z of [18, 26, 34, 48]) {
+    g.beginPath();
+    g.moveTo(u(-8.5), v(z));
+    g.lineTo(u(8.5), v(z));
+    g.stroke();
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return texture;
+}
+
 const floor = new THREE.Mesh(
-  new THREE.PlaneGeometry(60, 140),
-  new THREE.MeshStandardMaterial({ color: 0x131a2b, roughness: 0.92, metalness: 0.04 }),
+  new THREE.PlaneGeometry(FLOOR_SPAN.x, FLOOR_SPAN.z),
+  new THREE.MeshStandardMaterial({
+    map: rangeFloorTexture(), roughness: 0.92, metalness: 0.04,
+  }),
 );
 floor.rotation.x = -Math.PI / 2;
-floor.position.z = 50;
+floor.position.z = FLOOR_SPAN.at;
 scene.add(floor);
 
 // Distance is impossible to judge against an empty plane, and judging distance
