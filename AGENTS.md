@@ -62,6 +62,7 @@ npm run tip    # what the wand tip's filter costs in lag, stillness and recognit
 npm run sign   # how often the off hand's count fires on a gesture in transit
 npm run jitter # from a mirror recording: which point on your hand is shaking
 npm run assets # triangles, textures, download size and VRAM per GLB
+npm run shrink # bring a Meshy GLB's 2048 maps down to the asset budget
 ```
 
 ## 4. Rules that come from bugs already paid for
@@ -76,6 +77,13 @@ re-injected after auto-rigging dropped them, root motion was stripped from the
 hit clip, the idle's 97-degree body turn was damped, and the run clip was
 swapped for action 16. README documents each repair. Regenerating a model means
 redoing all of it by hand — never overwrite a GLB casually.
+
+**Every GLB out of Meshy needs shrinking before it is wired in.** It returns
+three 2048² maps whatever the object is -- 6.4 MB for a disc seen at forty
+metres. `node scripts/glb-shrink.mjs <file> 1024` re-lays the binary chunk with
+smaller maps and no dependency; `npm run assets` is the gate that says whether
+it worked. Keep only the shrunk file: re-running the shrink on it is lossy
+twice.
 
 **Do not rename or remove any `data-arena-*` attribute** in `index.html`. The
 game grabs the DOM by those. The in-game HUD is drawn on canvas in

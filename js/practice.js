@@ -158,26 +158,82 @@ for (let z = 10; z <= 70; z += 10) {
 }
 
 const RING_COLOURS = [0xffd98a, 0xe8e4dc, 0x9b87ff];
+/**
+ * A target face.
+ *
+ * The rings below are PROCEDURAL and stay -- not as the finished look, but as
+ * what is on screen for the second before target.glb arrives and for the whole
+ * session if it never does. A range with invisible targets is not a degraded
+ * range, it is a broken one, and a 0.76 MB fetch is enough time to notice.
+ *
+ * Nothing here decides a hit. The scoring ray is cast against the target's
+ * PLANE and its `radius`, so the mesh is free to be whatever it is without the
+ * readout and the arrow disagreeing. See loose().
+ */
 function buildTarget({ z, x = 0, y = 2.6, radius = 1.5, sway = 0 }) {
   const group = new THREE.Group();
   group.position.set(x, y, z);
+  const fallback = new THREE.Group();
+  group.add(fallback);
   RING_COLOURS.forEach((colour, i) => {
     const r = radius * (1 - i * 0.3);
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(r * 0.72, r, 48),
       new THREE.MeshBasicMaterial({ color: colour, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }),
     );
-    group.add(ring);
+    fallback.add(ring);
   });
   const face = new THREE.Mesh(
     new THREE.CircleGeometry(radius, 40),
     new THREE.MeshStandardMaterial({ color: 0x0d1424, roughness: 0.85 }),
   );
   face.position.z = -0.02;
-  group.add(face);
+  fallback.add(face);
   scene.add(group);
-  return { group, radius, home: x, sway, hitAt: -Infinity };
+  return { group, fallback, radius, home: x, sway, hitAt: -Infinity };
 }
+
+// ─── The face, from Meshy ────────────────────────────────────────────────────
+//
+// One fetch, one geometry and one material for all four targets: loadGLB caches
+// by URL, and every target clones the same loaded scene rather than asking for
+// its own. Four copies of one mesh is four draw calls against the sixteen the
+// procedural rings were costing.
+//
+// Fitted by its own bounding box rather than by a number typed in here, so the
+// disc lines up with the `radius` the scoring ray uses whatever scale it was
+// exported at. A model whose picture disagrees with its hit box is worse than
+// no model.
+const TARGET_MODEL = 'assets/models/range/target.glb';
+
+loadGLB(TARGET_MODEL).then(gltf => {
+  const source = gltf.scene;
+  const box = new THREE.Box3().setFromObject(source);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const across = Math.max(size.x, size.y) || 1;
+
+  for (const target of targets) {
+    const face = source.clone(true);
+    // The box is not centred on the origin in every export; put the middle of
+    // the disc on the group's own origin, which is what the ray aims at.
+    const centre = new THREE.Vector3();
+    box.getCenter(centre);
+    const scale = (target.radius * 2) / across;
+    face.scale.setScalar(scale);
+    face.position.copy(centre).multiplyScalar(-scale);
+    face.traverse(node => { node.castShadow = false; node.receiveShadow = false; });
+    target.group.add(face);
+    // Only now: the rings were the answer until this frame.
+    target.fallback.visible = false;
+  }
+  status = 'targets loaded';
+}).catch(() => {
+  // Left with the rings, which is why they are still here. Said out loud rather
+  // than swallowed -- a range that quietly looks like programmer art is a range
+  // nobody knows is broken.
+  status = 'target model failed — using rings';
+});
 
 const targets = [
   buildTarget({ z: 18, x: -5, radius: 1.7 }),

@@ -16,6 +16,7 @@
     "sign": "node scripts/sign-hold.mjs",
     "jitter": "node scripts/jitter.mjs",
     "assets": "node scripts/glb-info.mjs",
+    "shrink": "node scripts/glb-shrink.mjs",
     "refs": "node scripts/check-refs.mjs"
   }
 }
