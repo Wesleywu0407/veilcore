@@ -131,10 +131,45 @@ bowView.setVisible(false);
   }
 })();
 
-scene.add(new THREE.HemisphereLight(0x9fb4e8, 0x0b1020, 1.1));
-const key = new THREE.DirectionalLight(0xffe6c0, 1.5);
+// ─── Lit like a hall, not like a crypt ───────────────────────────────────────
+//
+// The duel is the dark room. This is not the duel: it is where somebody works
+// out what their hands are supposed to do, and a person learning needs to SEE.
+// The range was lit at the duel's level and read as unfinished -- a black void
+// with four grey smudges hanging in it, which tells a first-timer nothing about
+// where they are or how far away anything is.
+//
+// Three lights and no more. The sky is the room's own bounce, warm rather than
+// blue so the porcelain reads as porcelain; the key rakes across from above and
+// behind so the posts and the floor throw length; and the fill sits BEHIND THE
+// SHOOTER, which is the only light that reaches the faces of the targets --
+// they point back at you, so nothing in front of them ever lights them.
+scene.add(new THREE.HemisphereLight(0xdfe4f2, 0x2a3550, 1.5));
+
+const key = new THREE.DirectionalLight(0xffe6c0, 1.9);
 key.position.set(-8, 16, -6);
 scene.add(key);
+
+const fill = new THREE.DirectionalLight(0xcfd8ee, 0.85);
+fill.position.set(2, 5, -14);          // over your shoulder, aimed downrange
+scene.add(fill);
+
+// ── Distance, made visible ──
+//
+// Judging distance is the skill this room exists to teach, and an unfogged
+// range gives no cue for it at all: the far target is simply a smaller version
+// of the near one. Fog is the cheapest depth cue there is -- no geometry, no
+// draw call -- and it starts beyond the nearest target so nothing you are
+// actually shooting at is dimmed by it.
+//
+// The background is the SAME colour as the fog, and that is the whole trick: an
+// unset background is black, so the floor faded toward a fog colour and then
+// stopped dead against a hard black edge -- a room that ends. Matching them
+// turns that edge into a horizon, and the far target sits in air instead of in
+// front of a wall of nothing. One line, no geometry.
+const HAZE = 0x18203a;
+scene.fog = new THREE.Fog(HAZE, 26, 150);
+scene.background = new THREE.Color(HAZE);
 
 // ─── The range ───────────────────────────────────────────────────────────────
 
