@@ -3,45 +3,40 @@
 Made for `practice.html`, and kept apart from `../arena/` because nothing in the
 duel uses them.
 
-## `target.glb` — the archery target face
+## `plate.glb` — the porcelain disc the target is painted on
 
-Meshy text-to-3D, 2026-09-04. **832 triangles, one primitive, one material,
-three 1024² JPEGs, 0.56 MB.** Inside the budget in PLAN.md.
+Meshy text-to-3D preview, 2026-09-04. **832 triangles, one primitive, NO
+textures, 0.05 MB.** Coloured in the game, like the vfx assets in `../arena/vfx`.
 
-Colours are the page's own, read out of `:root` in `index.html` rather than
-remembered: `--violet` #9b87ff is a pale LAVENDER, not the deep aubergine a
-first attempt produced, `--paper` #f4eddf is a warm bone white, and `--gold`
-#ffd98a is the accent every emphasis in the UI is already made of. The season is
-called The Porcelain Trials and the duelist is sealed porcelain, so porcelain is
-the material the whole game is speaking.
+### The model is the plate. The rings are code. That split is the finding.
 
-### What it took, so the next one does not take it again
+Meshy was asked for the rings three separate ways and painted them three
+different ways: stepped trenches that went black in the range's light, pale
+bands with no contrast at all, and finally a red dartboard — a colour this game
+does not own. It is a diffusion model painting into a UV. It is very good at
+glaze, chipping and a faceted rim, and it will not hold four exact concentric
+circles in four exact hex values, because that is not the kind of thing it does.
 
-**Five prompts.** Each failed in a way worth writing down:
+Four exact concentric circles in four exact hex values is what CODE does, and
+the code for them was already in practice.js. So the disc underneath is the
+model, for the material and the silhouette, and the rings on top are
+RingGeometry in the page's own `--paper`, `--violet` and `--gold`. Nothing is
+left to a sampler in the part you have to aim at; nothing is drawn by hand in
+the part that only has to look like porcelain.
+
+The textured version was thrown away. Only the untextured preview is kept, which
+is also why this is 0.05 MB and needs no shrinking.
+
+### Getting the geometry took five prompts
 
 1. *"A thin round face"* → a **dome**. "Thin" does not stop Meshy inflating.
-2. *"Standing upright on its edge"* → grew a **plinth**. Anything that implies
-   support gets support. Say the object "floats alone and touches nothing".
-3. Rings asked for as geometry → **stepped trenches**, which in the range's low
-   light became shadow, and a bullseye painted deep violet became a black hole.
-   It read as a doughnut and it shipped for about ten minutes.
-4. *"Completely smooth, no relief"* → **still carved the rings**. The word
-   "target" carries ring geometry with it and no amount of NO gets it out.
-5. **What worked: ask for a blank plate.** A "plain blank circular porcelain
-   plate, completely smooth and featureless" has nothing to carve, and then the
-   REFINE step paints every ring on. Geometry from the preview, decoration from
-   the texture -- that split is the whole trick.
+2. *"Standing upright on its edge"* → grew a **plinth**. Anything implying
+   support gets support. Say it "floats alone and touches nothing".
+3. Rings asked for as geometry → **stepped trenches**, black in this light.
+4. *"Completely smooth, no relief"* → **still carved rings**. The word "target"
+   carries ring geometry with it and no amount of NO gets it out.
+5. **What worked: ask for a blank plate.** "A plain blank circular porcelain
+   plate, completely smooth and featureless" has nothing to carve.
 
-**The bullseye must be the brightest thing on the object**, stated in capitals
-in the texture prompt. In a dark room anything dark in the middle is a hole, not
-a mark to aim at.
-
-**`texture_prompt` is capped at 800 characters.** The API rejects a longer one
-with a message you only see if you print the raw response.
-
-**It came out at 5.97 MB.** Meshy returns 2048² maps whatever the object is.
-`node scripts/glb-shrink.mjs <file> 1024` brings it to 0.56 MB; only the shrunk
-file is kept, since re-running the shrink on it would be lossy twice.
-
-Practice.js keeps its procedural rings as a fallback for the frame before this
-has loaded, and for good if it never does.
+Also: `texture_prompt` is capped at 800 characters, and the API only says so if
+you print the raw response.

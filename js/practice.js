@@ -174,8 +174,7 @@ const RING_COLOURS = [0xffd98a, 0xe8e4dc, 0x9b87ff];
 function buildTarget({ z, x = 0, y = 2.6, radius = 1.5, sway = 0 }) {
   const group = new THREE.Group();
   group.position.set(x, y, z);
-  // Kept as a group of its own: the Meshy face will hide these rather than
-  // replace them, so a frame where the asset has not arrived still has targets.
+  // The painted face. A group of its own so the plate can sit behind it.
   const fallback = new THREE.Group();
   group.add(fallback);
   RING_COLOURS.forEach((colour, i) => {
@@ -186,53 +185,101 @@ function buildTarget({ z, x = 0, y = 2.6, radius = 1.5, sway = 0 }) {
     );
     fallback.add(ring);
   });
+  // ── DoubleSide, like the rings, and not by taste ──
+  //
+  // A CircleGeometry faces +z and the shooter is on the -z side, so at the
+  // default FrontSide this backing was being back-face culled -- it has never
+  // once been drawn. That is also why the rings were never hidden by it, and
+  // why moving things along z to get in front of it did nothing at all: there
+  // was nothing there to be in front of.
   const face = new THREE.Mesh(
     new THREE.CircleGeometry(radius, 40),
-    new THREE.MeshStandardMaterial({ color: 0x0d1424, roughness: 0.85 }),
+    new THREE.MeshStandardMaterial({ color: 0x0d1424, roughness: 0.85, side: THREE.DoubleSide }),
   );
-  face.position.z = -0.02;
+  // Behind the rings. The shooter is on the -z side -- which this file was wrong
+  // about until the backing was made DoubleSide and promptly hid everything.
+  face.position.z = 0.02;
   fallback.add(face);
+
+  // ── The bullseye, and why it is the brightest thing here ──
+  //
+  // The rings above are annuli and the backing behind them is dark, so the
+  // middle of every target was a dark hole -- the one place on the object you
+  // are actually aiming at, and the only place with nothing in it. In a room lit
+  // like this one, dark in the middle does not read as a mark, it reads as an
+  // absence.
+  //
+  // --gold, from index.html, which is what every emphasis in this game is
+  // already made of. Basic rather than standard: it must not get dimmer as the
+  // range does.
+  const bullseye = new THREE.Mesh(
+    new THREE.CircleGeometry(radius * 0.2, 28),
+    new THREE.MeshBasicMaterial({ color: 0xffd98a, side: THREE.DoubleSide }),
+  );
+  bullseye.position.z = -0.03;
+  fallback.add(bullseye);
   scene.add(group);
   return { group, fallback, radius, home: x, sway, hitAt: -Infinity };
 }
 
-// ─── The face, from Meshy ────────────────────────────────────────────────────
+// ─── The plate, from Meshy ───────────────────────────────────────────────────
 //
-// One fetch, one geometry, one material for all four: loadGLB caches by URL and
-// each target clones the loaded scene, so this is four draw calls where the
-// procedural rings were sixteen.
+// The DISC is the model; the rings are still drawn in code, and that split is
+// deliberate rather than a compromise.
 //
-// Fitted by its own bounding box rather than by a number typed in here, so the
-// disc lines up with the `radius` the scoring ray uses whatever scale it was
-// exported at. A model whose picture disagrees with its hit box is worse than no
-// model at all.
-const TARGET_MODEL = 'assets/models/range/target.glb';
+// Meshy was asked for the rings three different ways and painted them three
+// different ways: stepped trenches that went black in this light, pale bands
+// with no contrast at all, and finally a red dartboard that is not a colour this
+// game owns. It is a diffusion model painting into a UV -- it is very good at
+// glaze, chipping and a faceted rim, and it will not hold four exact concentric
+// circles in four exact hex values, because that is not what it does.
+//
+// Four exact concentric circles in four exact hex values is what CODE does, and
+// the code for them was already here. So: the plate underneath is the model, for
+// the material and the silhouette. The rings on top are RingGeometry, in the
+// page's own --paper, --violet and --gold. Nothing is left to chance in the part
+// you have to aim at, and nothing is drawn by hand in the part that just has to
+// look like porcelain.
+const PLATE_MODEL = 'assets/models/range/plate.glb';
 
-loadGLB(TARGET_MODEL).then(gltf => {
-  const source = gltf.scene;
-  const box = new THREE.Box3().setFromObject(source);
+loadGLB(PLATE_MODEL).then(gltf => {
+  const box = new THREE.Box3().setFromObject(gltf.scene);
   const size = new THREE.Vector3();
   box.getSize(size);
   const across = Math.max(size.x, size.y) || 1;
   const centre = new THREE.Vector3();
   box.getCenter(centre);
 
+  // Untextured, so it is coloured here -- warm bone white, the page's --paper.
+  const porcelain = new THREE.MeshStandardMaterial({
+    color: 0xf4eddf, roughness: 0.62, metalness: 0.02,
+  });
+
   for (const target of targets) {
-    const face = source.clone(true);
-    const scale = (target.radius * 2) / across;
-    face.scale.setScalar(scale);
-    // The exported box is not centred on the origin; put the middle of the disc
-    // on the group's own origin, which is the point the ray aims at.
-    face.position.copy(centre).multiplyScalar(-scale);
-    face.traverse(node => { node.castShadow = false; node.receiveShadow = false; });
-    target.group.add(face);
-    target.fallback.visible = false;   // the rings were the answer until this frame
+    const plate = gltf.scene.clone(true);
+    // Slightly WIDER than the painted face, so it reads as a plate the rings
+    // are painted on rather than as a disc hiding behind them.
+    const scale = (target.radius * 2.16) / across;
+    plate.scale.setScalar(scale);
+    plate.position.copy(centre).multiplyScalar(-scale);
+    // ── Clear of the rings, by the plate's OWN thickness ──
+    //
+    // Pushed by a number picked by eye it straddled them and hid them from both
+    // sides: scaled up, this disc is 0.21 deep, and 0.06 of clearance is inside
+    // it. So the offset is measured off the model -- half its depth, plus enough
+    // to keep the painted face off its surface.
+    plate.position.z += (size.z * scale) / 2 + 0.05;
+    plate.traverse(node => {
+      if (!node.isMesh) return;
+      node.material = porcelain;
+      node.castShadow = false;
+      node.receiveShadow = false;
+    });
+    target.group.add(plate);
   }
 }).catch(() => {
-  // Left with the rings, which is why they are still there. Said out loud rather
-  // than swallowed: a range that quietly looks like programmer art is a range
-  // nobody knows is broken.
-  status = 'target model failed — using rings';
+  // The rings are the target either way; only the plate behind them is missing.
+  status = 'plate model failed — rings only';
 });
 
 const targets = [
