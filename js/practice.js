@@ -559,16 +559,81 @@ function loose(power) {
 
 // ─── Loop ────────────────────────────────────────────────────────────────────
 
+// ─── Failing loudly ──────────────────────────────────────────────────────────
+//
+// An exception thrown inside a requestAnimationFrame callback stops the chain
+// dead. Everything drawn on a canvas freezes on the frame it died in, and the
+// `<video>` behind the preview keeps playing because it is a DOM element and
+// not a canvas -- so the range looks ALIVE and simply stops responding, with
+// nothing anywhere saying why.
+//
+// The duel has had this guard for a while and says the same thing beside it.
+// The range did not, and the difference cost an afternoon: a fault that only
+// happens with a working camera is invisible to anyone whose camera is blocked,
+// and the only report available was "it stopped".
+let fatalError = null;
+
+function reportFatal(error, where) {
+  if (fatalError) return;
+  fatalError = error;
+  running = false;
+  console.error(`[veilcore range] ${where}`, error);
+  status = `${where} — ${error?.message ?? error}`;
+  if (errorLine) {
+    errorLine.hidden = false;
+    errorLine.textContent = `${status}. Reload to restart; the console has the stack.`;
+  }
+  // Whatever else died, say so ON the glass. The overlay is the only surface
+  // left that is certainly still working.
+  try {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.letterSpacing = '0.12em';
+    ctx.font = "500 13px 'IBM Plex Mono', monospace";
+    ctx.fillStyle = '#ff9c82';
+    ctx.fillText(status, innerWidth / 2, innerHeight / 2);
+    ctx.fillText('reload to restart — the console has the stack',
+      innerWidth / 2, innerHeight / 2 + 22);
+    ctx.restore();
+  } catch { /* the canvas is gone too; the console still has it */ }
+}
+
 let last = performance.now();
 function loop(now) {
   if (!running) return;
+  try {
+    step(now);
+  } catch (error) {
+    reportFatal(error, 'the range stopped');
+    return;
+  }
+  requestAnimationFrame(loop);
+}
+
+function step(now) {
+  // ── The overlay has to still be the size of the window ──
+  //
+  // `resize` is an event, and an event is a promise that something will be
+  // announced. A display being switched, a DPR change, a machine waking from
+  // sleep -- these can leave the canvas a different size from the window, and a
+  // canvas whose width is stale or zero draws NOTHING AND THROWS NOTHING. The
+  // scoreboard, the instruction and the key legend simply stop being there,
+  // which reads as "you broke it" and cannot be told apart from a crash.
+  //
+  // Two integer comparisons a frame, against a whole class of silent
+  // disappearance. The 3D and the camera preview keep working throughout, which
+  // is what makes it so convincing and so hard to report.
+  // The canvas can drift out of step with the window without a `resize` ever
+  // arriving -- a display switched, a DPR change, a wake from sleep. Two integer
+  // comparisons a frame, and resize() itself refuses to act on a zero.
+  if (overlay.width !== innerWidth || overlay.height !== innerHeight) resize();
+
   if (menuOpen) {
     // Keep the chain alive and the last frame on the glass; simulate nothing.
     // The 2D overlay is only cleared at the top of a real step, so the score
     // and the crosshair stay put underneath.
     last = now;
     renderer.render(scene, camera);
-    requestAnimationFrame(loop);
     return;
   }
   const dt = Math.min((now - last) / 1000, 0.08);
@@ -658,7 +723,6 @@ function loop(now) {
   drawPreview(frame, bow);
   drawPanel(frame, bow, bowSign, armed);
   renderer.render(scene, camera);
-  requestAnimationFrame(loop);
 }
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
@@ -975,6 +1039,23 @@ function drawReadout(frame, bow, bowSign, armed) {
 // ─── Boot ────────────────────────────────────────────────────────────────────
 
 function resize() {
+  // ── Never size to nothing ──
+  //
+  // A hidden tab, a minimised window and a machine waking from sleep all report
+  // innerWidth 0 for a while. Sized from that, the overlay canvas becomes 0x0 --
+  // and a 0x0 canvas draws NOTHING AND THROWS NOTHING. The scoreboard, the
+  // instruction line and the key legend just stop being there.
+  //
+  // Then nothing puts them back, because coming out of that state does not
+  // always fire a `resize`. The 3D keeps rendering and the camera preview keeps
+  // updating, since neither uses this canvas, so the page looks perfectly alive
+  // with half its interface gone -- which is indistinguishable from having been
+  // broken by whatever changed last.
+  //
+  // Keeping the last good size costs one comparison and removes the whole
+  // class. Reproduced here at zero width with the 3D still running.
+  if (!(innerWidth > 0 && innerHeight > 0)) return;
+
   const dpr = Math.min(devicePixelRatio, 1.25);
   renderer.setSize(innerWidth, innerHeight, false);
   glCanvas.width = Math.floor(innerWidth * dpr);
