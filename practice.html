@@ -25,8 +25,18 @@
        could not tell "it did not see the sign" from "it saw it and refused".
        Mirrored, because a preview of yourself that is not mirrored is the one
        thing everybody finds unusable. C toggles it. */
+    /* Bottom right, where the mirror and the duel both keep theirs -- and NOT
+       the top right, which is .range-about's corner. Put there it was behind
+       the card at the same z-index, present and invisible, which is the one
+       failure a preview must not have. */
     .range-video {
-      position: fixed; right: 18px; top: 18px; width: 232px;
+      position: fixed; right: 18px; bottom: 52px; width: 232px;
+      /* Fixed, so the box is the same size before a stream arrives as after --
+         the scan canvas is bottom-aligned with it, and a video that collapses
+         to its own default while there is nothing to show leaves the two a
+         different height and the message floating above the box. 4:3 is what
+         the duel's preview uses. */
+      aspect-ratio: 4 / 3;
       transform: scaleX(-1); border-radius: 6px; opacity: .9;
       border: 1px solid #2a3350; pointer-events: none; z-index: 2;
       background: #05070d;
@@ -36,11 +46,12 @@
        which is why it was a 1x1 pixel before it was ever shown, and why hiding
        it has to put it back to one rather than remove it. */
     .range-video.is-tucked {
-      width: 1px; height: 1px; opacity: 0; border: 0; right: 0; top: 0;
+      width: 1px; height: 1px; aspect-ratio: auto;
+      opacity: 0; border: 0; right: 0; bottom: 0;
     }
     /* The landmarks go on top of it, in its own coordinates. */
     .range-scan {
-      position: fixed; right: 18px; top: 18px; width: 232px;
+      position: fixed; right: 18px; bottom: 52px; width: 232px;
       transform: scaleX(-1); border-radius: 6px;
       pointer-events: none; z-index: 3;
     }

@@ -491,6 +491,27 @@ function readBowSign(hands) {
 // archery.js's OWN answer rather than a second guess -- so if the range has the
 // two the wrong way round, this is where you see it, and you see it before you
 // have wasted ten arrows wondering why the draw will not read.
+/**
+ * A word on the preview, the right way round.
+ *
+ * The canvas is flipped by CSS so the landmarks land over a mirrored picture,
+ * and everything drawn into it inherits that -- including text, which comes out
+ * backwards and unreadable. It was, for a while: "no camera — H to retry"
+ * rendered as "yrter ot H — aremac on" and nobody could have read it.
+ *
+ * Pre-flipping cancels the CSS one, and `x` still means "from the left of the
+ * box as you see it".
+ */
+function label(text, x, y, colour, w) {
+  scanCtx.save();
+  scanCtx.translate(w, 0);
+  scanCtx.scale(-1, 1);
+  scanCtx.font = "500 10px 'IBM Plex Mono', monospace";
+  scanCtx.fillStyle = colour;
+  scanCtx.fillText(text, x, y);
+  scanCtx.restore();
+}
+
 const BOW_HAND = '#ffd98a';
 const STRING_HAND = '#8cc9ff';
 const LOST = '#ff6b6b';
@@ -499,13 +520,23 @@ function drawPreview(frame, bow) {
   if (!scan || !scanCtx) return;
   video.classList.toggle('is-tucked', !showCamera);
   scan.hidden = !showCamera;
-  if (!showCamera || !video.videoWidth) return;
+  if (!showCamera) return;
 
+  // ── The empty case is the one this exists for ──
+  //
+  // Returning early on "no stream yet" put the one message that matters --
+  // there is no camera -- behind the very condition it describes. A blank box
+  // in the corner is exactly as uninformative as the 1x1 pixel it replaced.
   const w = video.clientWidth || 232;
-  const h = Math.round(w * video.videoHeight / video.videoWidth);
+  const live = video.videoWidth > 0;
+  const h = live ? Math.round(w * video.videoHeight / video.videoWidth) : Math.round(w * 0.75);
   if (scan.width !== w || scan.height !== h) { scan.width = w; scan.height = h; }
   scan.style.height = `${h}px`;
   scanCtx.clearRect(0, 0, w, h);
+  if (!live) {
+    label(tracking ? 'waiting for a frame' : 'no camera — H to retry', 6, 14, LOST, w);
+    return;
+  }
 
   // The tracker un-mirrors x on the way in and the preview is mirrored back by
   // CSS, so these go on flipped, which lands them over the real thing.
@@ -529,18 +560,13 @@ function drawPreview(frame, bow) {
   // A blank preview is ambiguous in the one way that matters: a camera that
   // failed and a camera watching an empty room look the same. Naming it is the
   // difference between "move into frame" and "something is broken".
-  scanCtx.font = "500 10px 'IBM Plex Mono', monospace";
   if (!hands.length) {
-    scanCtx.fillStyle = LOST;
-    scanCtx.fillText(tracking ? 'no hands' : 'camera off — H', 6, 14);
+    label(tracking ? 'no hands' : 'camera off — H', 6, 14, LOST, w);
   } else if (hands.length === 1) {
-    scanCtx.fillStyle = '#b8894a';
-    scanCtx.fillText('one hand — the bow needs two', 6, 14);
+    label('one hand — the bow needs two', 6, 14, '#b8894a', w);
   } else {
-    scanCtx.fillStyle = BOW_HAND;
-    scanCtx.fillText('bow', 6, 14);
-    scanCtx.fillStyle = STRING_HAND;
-    scanCtx.fillText('string', 34, 14);
+    label('bow', 6, 14, BOW_HAND, w);
+    label('string', 34, 14, STRING_HAND, w);
   }
 }
 
