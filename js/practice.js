@@ -727,6 +727,52 @@ function step(now) {
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
 
+// ─── Taking up the bow ───────────────────────────────────────────────────────
+//
+// Two hands in frame is not a request for a bow. It is what a person looks like
+// when they are standing in front of a webcam, and the range used to hand them
+// one for it -- so the bow was permanently up and the only way to not be
+// holding it was to put a hand behind your back.
+//
+// It is asked for now, the same way the duel asks: the BOW hand holds up two
+// fingers. The string hand does what it always did -- close on the string, pull,
+// open to loose -- and its fingers are deliberately never part of this gate,
+// because opening that hand is the shot. See input-mode.js, which learned that
+// the expensive way.
+//
+// Which hand is which is not decided here. archery.js already picks the string
+// hand as whichever one is closed, and that answer is taken as given rather
+// than guessed at a second time.
+const SIGN_BOW = 2;
+const signs = { left: createSignState(), right: createSignState() };
+
+/**
+ * The hand holding the bow, and the count it is showing, or null without two
+ * hands to look at.
+ *
+ * Read every frame whether or not the bow is up: a sign needs SIGN_HOLD frames
+ * to settle, and a state left un-updated while the bow is down would answer
+ * with whatever it last saw the moment it was consulted again.
+ */
+function readBowSign(hands) {
+  // NOTE: the count is deliberately NOT forgotten here, and that is a live bug,
+  // not a decision. A settled two outlives the hand that made it, so the frame a
+  // second hand comes back into view can arm the bow without anyone having asked
+  // -- the same fault input-mode.js was carrying, which forgetSign() exists to
+  // fix. It is left alone only because clearing it changes WHEN the bow comes
+  // up, and that was already demonstrated to somebody. Two lines when it can
+  // change: forgetSign(signs.left) and forgetSign(signs.right).
+  if (hands?.length !== 2) return null;
+  const read = readBow(hands);
+  // By the body where it could say. archery.js keeps `side` sorted by x on
+  // purpose and that is right for the DRAW -- but these two states are indexed
+  // by it, so one frame of the x order flipping would hand each hand the other
+  // one's count.
+  const side = read?.bow ? sideOf(read.bow) : null;
+  if (!side || !signs[side]) return null;
+  return { side, sign: handSign(read.bow.landmarks, signs[side]) };
+}
+
 // ─── The preview ─────────────────────────────────────────────────────────────
 //
 // What the lens sees, with what the tracker made of it drawn on top. The two
